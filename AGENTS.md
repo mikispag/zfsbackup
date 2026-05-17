@@ -177,7 +177,8 @@ All modules import `internal/zfs`. Key exports:
 | `Fatal(msg, args...)` | Log at Error level and call os.Exit(1) |
 | `DefaultExecCommand(ctx, arg0, args...)` | Exec wrapper: resolves binary path, sets `LC_ALL=C`, forwards stderr |
 | `ParseDuration(s)` | Parse `"30m"`, `"7d"`, `"1w"`, etc. |
-| `ZfsList(props, type, dataset, flags...)` | Run `zfs list -H -p` and return tab-separated rows |
+| `ZfsList(props, type, dataset, flags...)` | Run `zfs list -j -p`, parse JSON, sort, return rows |
+| `ZpoolList(props)` | Run `zpool list -j -p`, parse JSON, return rows sorted by pool name |
 | `ExpandFsToProcess(include, exclude)` | List all filesystems under `include` minus `exclude`, sorted |
 | `IsValidZFSDataset(name)` | Validate a dataset name (no path traversal, no special chars) |
 | `MaybeMbuffer(ctx, args, reader)` | Wrap reader with mbuffer if args non-empty |

@@ -2,9 +2,12 @@ package zfs
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -51,7 +54,8 @@ func ZfsDestroy(target string, flags ...string) error {
 }
 
 // ParseTabular runs a command and returns its tab-separated output as a slice
-// of rows, each row being a slice of field values.
+// of rows, each row being a slice of field values. Used for zfs-get(8) queries
+// where JSON output has a different schema from zfs-list(8).
 func ParseTabular(arg0 string, args []string) ([][]string, error) {
 	out, err := DefaultExecCommand(context.Background(), arg0, args...).Output()
 	if err != nil {
@@ -110,16 +114,173 @@ func ParseTabularBatched(arg0 string, fixedArgs, datasets []string) ([][]string,
 	return all, flush()
 }
 
-// ZfsList runs "zfs list" for the given properties and object type under fullds,
-// returning the tab-separated output as a slice of rows.
+// zfsPropValue represents a single property value in JSON output from
+// zfs-list(8) or zpool-list(8).
+type zfsPropValue struct {
+	Value string `json:"value"`
+}
+
+// zfsListJSON is the top-level structure returned by 'zfs list -j'.
+type zfsListJSON struct {
+	Datasets map[string]struct {
+		Properties map[string]zfsPropValue `json:"properties"`
+	} `json:"datasets"`
+}
+
+// zpoolListJSON is the top-level structure returned by 'zpool list -j'.
+type zpoolListJSON struct {
+	Pools map[string]struct {
+		Properties map[string]zfsPropValue `json:"properties"`
+	} `json:"pools"`
+}
+
+// ZfsList runs "zfs list -j -p" for the given properties and object type under
+// fullds, returning property values as a slice of rows in the order of props.
+//
+// Sort flags (-s key / -S key) are intercepted: the sort key is requested from
+// ZFS (added to the property list if the caller omitted it), and the resulting
+// rows are sorted in Go. This is necessary because JSON object keys are
+// unordered; the ZFS-side sort order is not preserved in the parsed output.
 func ZfsList(props []string, t string, fullds string, flags ...string) ([][]string, error) {
-	args := []string{"list", "-H", "-p", "-o", strings.Join(props, ","), "-t", t}
+	// Identify sort key and direction; strip -s/-S from the command so ZFS
+	// does not waste time sorting output whose order we will discard.
+	sortKey, descending := "", false
+	filteredFlags := make([]string, 0, len(flags))
+	for i := 0; i < len(flags); i++ {
+		if (flags[i] == "-s" || flags[i] == "-S") && i+1 < len(flags) {
+			sortKey = flags[i+1]
+			descending = flags[i] == "-S"
+			i++ // skip the argument
+			continue
+		}
+		filteredFlags = append(filteredFlags, flags[i])
+	}
+
+	// Include the sort key in the request if the caller did not ask for it,
+	// so we have the values needed to order the result slice.
+	reqProps := props
+	addedSortProp := sortKey != "" && !containsStr(props, sortKey)
+	if addedSortProp {
+		extra := make([]string, len(props)+1)
+		copy(extra, props)
+		extra[len(props)] = sortKey
+		reqProps = extra
+	}
+
+	args := []string{"list", "-j", "-p", "-o", strings.Join(reqProps, ","), "-t", t}
 	if t == "snapshot" || t == "bookmark" {
 		args = append(args, "-r", "-d1")
 	}
-	args = append(args, flags...)
+	args = append(args, filteredFlags...)
 	args = append(args, fullds)
-	return ParseTabular("zfs", args)
+
+	out, err := DefaultExecCommand(context.Background(), "zfs", args...).Output()
+	if err != nil {
+		return nil, err
+	}
+
+	var result zfsListJSON
+	if err := json.Unmarshal(out, &result); err != nil {
+		return nil, fmt.Errorf("cannot parse zfs list output: %w", err)
+	}
+
+	type entry struct {
+		key  string // JSON map key (dataset name), used as sort fallback
+		vals map[string]string
+	}
+	entries := make([]entry, 0, len(result.Datasets))
+	for k, ds := range result.Datasets {
+		v := make(map[string]string, len(ds.Properties))
+		for pname, pval := range ds.Properties {
+			v[pname] = pval.Value
+		}
+		entries = append(entries, entry{key: k, vals: v})
+	}
+
+	// Sort by the requested key; fall back to the dataset name for callers
+	// that do not specify a sort flag.
+	effectiveKey := sortKey
+	if effectiveKey == "" {
+		effectiveKey = "name"
+	}
+	sort.SliceStable(entries, func(i, j int) bool {
+		vi := entries[i].vals[effectiveKey]
+		if vi == "" {
+			vi = entries[i].key // fall back to map key if property absent
+		}
+		vj := entries[j].vals[effectiveKey]
+		if vj == "" {
+			vj = entries[j].key
+		}
+		// Numeric comparison for integer properties (createtxg, creation, etc.).
+		ni, erri := strconv.ParseInt(vi, 10, 64)
+		nj, errj := strconv.ParseInt(vj, 10, 64)
+		if erri == nil && errj == nil {
+			if descending {
+				return ni > nj
+			}
+			return ni < nj
+		}
+		if descending {
+			return vi > vj
+		}
+		return vi < vj
+	})
+
+	// Build result rows using only the originally-requested properties.
+	rows := make([][]string, len(entries))
+	for i, e := range entries {
+		row := make([]string, len(props))
+		for j, p := range props {
+			row[j] = e.vals[p]
+		}
+		rows[i] = row
+	}
+	return rows, nil
+}
+
+// ZpoolList runs "zpool list -j -p" for the given properties, returning rows
+// sorted by pool name. Analogous to ZfsList for the zpool(8) command.
+func ZpoolList(props []string) ([][]string, error) {
+	args := []string{"list", "-j", "-p", "-o", strings.Join(props, ",")}
+	out, err := DefaultExecCommand(context.Background(), "zpool", args...).Output()
+	if err != nil {
+		return nil, err
+	}
+
+	var result zpoolListJSON
+	if err := json.Unmarshal(out, &result); err != nil {
+		return nil, fmt.Errorf("cannot parse zpool list output: %w", err)
+	}
+
+	type entry struct {
+		name  string
+		props map[string]string
+	}
+	entries := make([]entry, 0, len(result.Pools))
+	for name, pool := range result.Pools {
+		p := make(map[string]string, len(pool.Properties))
+		for k, v := range pool.Properties {
+			p[k] = v.Value
+		}
+		if p["name"] == "" {
+			p["name"] = name // fall back to map key
+		}
+		entries = append(entries, entry{name: name, props: p})
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].name < entries[j].name
+	})
+
+	rows := make([][]string, len(entries))
+	for i, e := range entries {
+		row := make([]string, len(props))
+		for j, prop := range props {
+			row[j] = e.props[prop]
+		}
+		rows[i] = row
+	}
+	return rows, nil
 }
 
 // Exists reports whether a ZFS filesystem exists.
@@ -225,4 +386,14 @@ func ZfsSetPlaceholder(src, placeholderName string) error {
 		return err
 	}
 	return zfsGcPlaceholder(FSName(src) + newbm)
+}
+
+// containsStr reports whether s appears in the slice.
+func containsStr(ss []string, s string) bool {
+	for _, v := range ss {
+		if v == s {
+			return true
+		}
+	}
+	return false
 }

@@ -43,35 +43,35 @@ type mon struct {
 }
 
 func (m *mon) zpoolMetrics() error {
-	outp, err := zfs.ParseTabular("zpool", []string{"list", "-H", "-p", "-o", "name,capacity,health"})
+	// ZpoolList uses 'zpool list -j -p' and returns rows sorted by pool name.
+	outp, err := zfs.ZpoolList([]string{"name", "capacity", "health"})
 	if err != nil {
 		return fmt.Errorf("zpool list failed: %w", err)
 	}
 	var brokenPools int64
 	for _, line := range outp {
-		slog.Debug("parsing zpool line", "line", line)
 		if len(line) != 3 {
 			return fmt.Errorf("unexpected zpool output: %v", line)
 		}
-		if line[2] != "ONLINE" {
+		name, cap, health := line[0], line[1], line[2]
+		if health != "ONLINE" {
 			brokenPools++
 		}
-		// ZFS outputs "-" for capacity when a pool is faulted or unavailable.
-		// Skip the capacity metric for that pool but continue so that the
+		// ZFS reports "-" for capacity when a pool is faulted or unavailable.
+		// Skip the capacity metric for that pool but continue so the
 		// HasBrokenPool counter still reaches the monitoring system.
-		raw := line[1] // zpool list -p emits raw integers, never a trailing "%"
-		if raw == "-" {
+		if cap == "-" {
 			slog.Warn("pool capacity unavailable; skipping PoolUsedSpacePercent for this pool",
-				"pool", line[0], "health", line[2])
+				"pool", name, "health", health)
 			continue
 		}
-		pct, err := strconv.ParseInt(raw, 10, 64)
+		pct, err := strconv.ParseInt(cap, 10, 64)
 		if err != nil {
-			return fmt.Errorf("cannot parse pool capacity %q: %w", line[1], err)
+			return fmt.Errorf("cannot parse pool capacity %q: %w", cap, err)
 		}
 		m.metrics = append(m.metrics, metric{
 			Name:          "PoolUsedSpacePercent",
-			Dimensions:    map[string]string{"pool": line[0]},
+			Dimensions:    map[string]string{"pool": name},
 			Value:         pct,
 			EvalTimestamp: time.Now(),
 		})
