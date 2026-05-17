@@ -379,7 +379,7 @@ command="zfsbackup receiver --base_dataset=backuppool/accounts/myhost --config=/
 | `base_dataset` | Root destination dataset |
 | `mbuffer_args` | Buffer on the receive side for smoother throughput |
 | `enforce_local_properties` | ZFS properties to strip from the stream and set locally |
-| `disable_mount` | Create received filesystems with `canmount=off` (default: `true`) |
+| `disable_mount` | Pass `-u -o canmount=off` to `zfs receive` so the dataset is never mounted now or on future `zfs mount -a` / boot (default: `true`) |
 
 ```json
 {

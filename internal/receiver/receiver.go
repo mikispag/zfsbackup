@@ -146,7 +146,15 @@ func receive(baseds, ds, compression string, cfg *config.ReceiverConfig, fast bo
 	eg, ctx := zfs.NewGroup(context.Background())
 
 	destinationDs := fmt.Sprintf("%s/%s", baseds, ds)
+	// -u suppresses the immediate post-receive mount; -o canmount=off makes the
+	// received dataset persistently non-mountable so it does not show up on
+	// future 'zfs mount -a' or boot. Together they fulfil the disable_mount
+	// contract: the received dataset is never mounted under any circumstance.
+	disableMount := cfg.DisableMount == nil || *cfg.DisableMount
 	recvArgs := []string{"receive", "-vu"}
+	if disableMount {
+		recvArgs = append(recvArgs, "-o", "canmount=off")
+	}
 	for _, p := range cfg.EnforceLocalProperties {
 		if p == "" || strings.ContainsAny(p, " \t\n\r") {
 			zfs.Fatal("enforce_local_properties entry is empty or contains whitespace", "property", p)
@@ -154,6 +162,12 @@ func receive(baseds, ds, compression string, cfg *config.ReceiverConfig, fast bo
 		if strings.HasPrefix(p, "-") {
 			zfs.Fatal("enforce_local_properties entry must not start with '-' (would be misinterpreted as a zfs receive flag)",
 				"property", p)
+		}
+		// zfs receive rejects '-o canmount=off' and '-x canmount' together;
+		// the explicit -o we just set is the stronger guarantee, so drop the -x.
+		if disableMount && p == "canmount" {
+			slog.Debug("ignoring enforce_local_properties=canmount; superseded by disable_mount=true (-o canmount=off)")
+			continue
 		}
 		recvArgs = append(recvArgs, "-x", p)
 	}
@@ -169,7 +183,6 @@ func receive(baseds, ds, compression string, cfg *config.ReceiverConfig, fast bo
 			break
 		}
 	}
-	disableMount := cfg.DisableMount == nil || *cfg.DisableMount
 	if !fast {
 		zfs.FatalIfError(checkParent(destinationDs, disableMount), "checking parent exists: %w")
 	}

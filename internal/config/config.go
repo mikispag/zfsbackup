@@ -283,9 +283,10 @@ type ReceiverConfig struct {
 	// "-P 90 -m 3%" if unset and mbuffer is installed.
 	MbufferArgs []string `json:"mbuffer_args,omitempty"`
 
-	// DisableMount creates received datasets with canmount=off so they are not
-	// auto-mounted. Defaults to true if nil. Set to false only if the replica
-	// must be directly mountable.
+	// DisableMount makes the receiver pass "-u -o canmount=off" to zfs receive
+	// so the received dataset is never mounted — neither immediately after this
+	// receive nor on any future "zfs mount -a" or boot. Defaults to true if nil.
+	// Set to false only if the replica must be directly mountable.
 	DisableMount *bool `json:"disable_mount,omitempty"`
 
 	// Resumable enables zfs receive -s so interrupted transfers can be resumed
