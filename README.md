@@ -55,7 +55,7 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 TimeoutStartSec=0
-ExecStart=/usr/local/bin/zfsbackup run --config /etc/zfsbackup/mypool.json
+ExecStart=/usr/local/bin/zfsbackup run --config /etc/zfsbackup/mypool.json --dry-run=false
 
 # No [Install] section — this service is activated exclusively by the .timer unit
 ```
