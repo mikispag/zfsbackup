@@ -217,7 +217,7 @@ func Main() {
 	baseDataset := receiverFlags.String("base_dataset", "", "root destination dataset; overrides config")
 	debug := receiverFlags.Bool("debug", false, "enable debug logging")
 	configFile := receiverFlags.String("config", "", "path to receiver config file")
-	receiverFlags.Parse(flag.Args()[1:])
+	receiverFlags.Parse(os.Args[2:])
 	zfs.SetupLogger(*debug)
 
 	// Config is optional; receiver is invoked as an SSH ForceCommand and is

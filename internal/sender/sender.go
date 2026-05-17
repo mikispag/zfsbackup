@@ -568,7 +568,7 @@ func Main() {
 	limitFs := senderFlags.String("limit-fs", "", "restrict operation to this filesystem")
 	parallelism := senderFlags.Int("parallelism", 1, "number of filesystems to process in parallel")
 	debug := senderFlags.Bool("debug", false, "enable debug logging")
-	senderFlags.Parse(flag.Args()[1:])
+	senderFlags.Parse(os.Args[2:])
 	zfs.SetupLogger(*debug)
 
 	cfg := &config.Config{}

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"flag"
 	"log/slog"
+	"os"
 
 	"github.com/mikispag/zfsbackup/internal/config"
 	"github.com/mikispag/zfsbackup/internal/deleter"
@@ -23,7 +24,7 @@ func runMain() {
 	parallelism := runFlags.Int("parallelism", 1, "number of filesystems to process in parallel")
 	dryRun := runFlags.Bool("dry-run", false, "pass dry-run flag to snapshot and deleter")
 	debug := runFlags.Bool("debug", false, "enable debug logging")
-	runFlags.Parse(flag.Args()[1:])
+	runFlags.Parse(os.Args[2:])
 	zfs.SetupLogger(*debug)
 
 	if *configFile == "" {

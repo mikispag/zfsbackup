@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"os"
 	"slices"
 	"strconv"
 	"time"
@@ -118,7 +119,7 @@ func Main() {
 	configFile := snapshotFlags.String("config", "", "path to config file")
 	dryRun := snapshotFlags.Bool("dry-run", false, "print commands without executing")
 	debug := snapshotFlags.Bool("debug", false, "enable debug logging")
-	snapshotFlags.Parse(flag.Args()[1:])
+	snapshotFlags.Parse(os.Args[2:])
 	zfs.SetupLogger(*debug)
 
 	cfg := &config.Config{}

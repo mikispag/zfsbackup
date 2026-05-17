@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/big"
+	"os"
 	"regexp"
 	"slices"
 	"strconv"
@@ -257,7 +258,7 @@ func Main() {
 	dryRun := deleterFlags.Bool("dry-run", true, "print deletions without executing (default: true for safety)")
 	parallelism := deleterFlags.Int("parallelism", 1, "number of filesystems to process in parallel")
 	debug := deleterFlags.Bool("debug", false, "enable debug logging")
-	deleterFlags.Parse(flag.Args()[1:])
+	deleterFlags.Parse(os.Args[2:])
 	zfs.SetupLogger(*debug)
 
 	cfg := &config.Config{}

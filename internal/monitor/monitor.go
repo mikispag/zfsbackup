@@ -179,7 +179,7 @@ func Main() {
 	monitorFlags := flag.NewFlagSet("monitor", flag.ExitOnError)
 	configFile := monitorFlags.String("config", "", "path to config file")
 	debug := monitorFlags.Bool("debug", false, "enable debug logging")
-	monitorFlags.Parse(flag.Args()[1:])
+	monitorFlags.Parse(os.Args[2:])
 	zfs.SetupLogger(*debug)
 
 	cfg := &config.Config{}
