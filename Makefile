@@ -1,4 +1,4 @@
-.PHONY: build deb pacman tests clean
+.PHONY: build deb pacman tests unit-tests integration-tests clean
 
 VERSION  ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 SIGN     ?= 1
@@ -8,7 +8,7 @@ BUILD_DIR = .
 build: $(BINARY)
 
 $(BINARY): $(shell find cmd internal -name '*.go') go.mod go.sum
-	CGO_ENABLED=0 go build -o $(BINARY) ./cmd/zfsbackup
+	CGO_ENABLED=0 go build -ldflags "-X main.version=$(VERSION)" -o $(BINARY) ./cmd/zfsbackup
 
 deb: $(BINARY)
 	rm -f $(BINARY)_*_amd64.deb
@@ -32,6 +32,8 @@ endif
 tests: unit-tests integration-tests
 
 unit-tests:
+	gofmt -l . | (! grep .)
+	go vet ./...
 	go test -count=1 ./...
 
 integration-tests:

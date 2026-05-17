@@ -151,6 +151,10 @@ func receive(baseds, ds, compression string, cfg *config.ReceiverConfig, fast bo
 		if p == "" || strings.ContainsAny(p, " \t\n\r") {
 			zfs.Fatal("enforce_local_properties entry is empty or contains whitespace", "property", p)
 		}
+		if strings.HasPrefix(p, "-") {
+			zfs.Fatal("enforce_local_properties entry must not start with '-' (would be misinterpreted as a zfs receive flag)",
+				"property", p)
+		}
 		recvArgs = append(recvArgs, "-x", p)
 	}
 	resumable := cfg.Resumable == nil || *cfg.Resumable
@@ -159,7 +163,10 @@ func receive(baseds, ds, compression string, cfg *config.ReceiverConfig, fast bo
 	}
 	for _, x := range cfg.ForceOverwriteDatasets {
 		if x == destinationDs {
+			slog.Info("zfs receive -F applied; remove this entry from force_overwrite_datasets after recovery to prevent future overwrites",
+				"dataset", destinationDs)
 			recvArgs = append(recvArgs, "-F")
+			break
 		}
 	}
 	disableMount := cfg.DisableMount == nil || *cfg.DisableMount

@@ -199,12 +199,12 @@ func TestMarkForPreservation_recentAndOldSnap_multiIntervalRule(t *testing.T) {
 	now := time.Now()
 	base := now.Add(-7 * 24 * time.Hour)
 	snaps := []snapshot{
-		makeSnap("old",    0,                                 base), // 7 days ago
+		makeSnap("old", 0, base),                                    // 7 days ago
 		makeSnap("recent", int64(7*24*time.Hour/time.Second), base), // ≈ now
 	}
 	dfp := &deleteFsProcessor{
-		fs:  "tank",
-		cfg: &config.DeleterConfig{Rules: []config.RetentionRule{{Interval: "3d", Count: 4, AllowHoles: true}}},
+		fs:    "tank",
+		cfg:   &config.DeleterConfig{Rules: []config.RetentionRule{{Interval: "3d", Count: 4, AllowHoles: true}}},
 		snaps: snaps,
 	}
 	_, err := dfp.markForPreservation()
@@ -235,12 +235,12 @@ func TestMarkForPreservation_snapOutsideRetentionWindow_skipped(t *testing.T) {
 	// and must be skipped (not preserved, not an error).
 	base := time.Unix(1_000_000, 0)
 	snaps := []snapshot{
-		makeSnap("ancient", 0, base),                                   // way outside window
-		makeSnap("recent",  int64(2*24*time.Hour/time.Second), base),   // inside window
+		makeSnap("ancient", 0, base),                                // way outside window
+		makeSnap("recent", int64(2*24*time.Hour/time.Second), base), // inside window
 	}
 	dfp := &deleteFsProcessor{
-		fs:  "tank",
-		cfg: &config.DeleterConfig{Rules: []config.RetentionRule{{Interval: "1h", Count: 2}}},
+		fs:    "tank",
+		cfg:   &config.DeleterConfig{Rules: []config.RetentionRule{{Interval: "1h", Count: 2}}},
 		snaps: snaps,
 	}
 	toDelete, err := dfp.markForPreservation()

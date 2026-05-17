@@ -1,12 +1,13 @@
 package zfs
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"regexp"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -159,7 +160,7 @@ func ZfsList(props []string, t string, fullds string, flags ...string) ([][]stri
 	// Include the sort key in the request if the caller did not ask for it,
 	// so we have the values needed to order the result slice.
 	reqProps := props
-	addedSortProp := sortKey != "" && !containsStr(props, sortKey)
+	addedSortProp := sortKey != "" && !slices.Contains(props, sortKey)
 	if addedSortProp {
 		extra := make([]string, len(props)+1)
 		copy(extra, props)
@@ -203,28 +204,30 @@ func ZfsList(props []string, t string, fullds string, flags ...string) ([][]stri
 	if effectiveKey == "" {
 		effectiveKey = "name"
 	}
-	sort.SliceStable(entries, func(i, j int) bool {
-		vi := entries[i].vals[effectiveKey]
-		if vi == "" {
-			vi = entries[i].key // fall back to map key if property absent
+	slices.SortStableFunc(entries, func(a, b entry) int {
+		va := a.vals[effectiveKey]
+		if va == "" {
+			va = a.key // fall back to map key if property absent
 		}
-		vj := entries[j].vals[effectiveKey]
-		if vj == "" {
-			vj = entries[j].key
+		vb := b.vals[effectiveKey]
+		if vb == "" {
+			vb = b.key
 		}
 		// Numeric comparison for integer properties (createtxg, creation, etc.).
-		ni, erri := strconv.ParseInt(vi, 10, 64)
-		nj, errj := strconv.ParseInt(vj, 10, 64)
-		if erri == nil && errj == nil {
-			if descending {
-				return ni > nj
+		var c int
+		if na, erra := strconv.ParseInt(va, 10, 64); erra == nil {
+			if nb, errb := strconv.ParseInt(vb, 10, 64); errb == nil {
+				c = cmp.Compare(na, nb)
+			} else {
+				c = cmp.Compare(va, vb)
 			}
-			return ni < nj
+		} else {
+			c = cmp.Compare(va, vb)
 		}
 		if descending {
-			return vi > vj
+			return -c
 		}
-		return vi < vj
+		return c
 	})
 
 	// Build result rows using only the originally-requested properties.
@@ -268,8 +271,8 @@ func ZpoolList(props []string) ([][]string, error) {
 		}
 		entries = append(entries, entry{name: name, props: p})
 	}
-	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].name < entries[j].name
+	slices.SortFunc(entries, func(a, b entry) int {
+		return cmp.Compare(a.name, b.name)
 	})
 
 	rows := make([][]string, len(entries))
@@ -326,24 +329,51 @@ func BookmarkName(fullname string) string {
 
 // zfsGcPlaceholder removes any placeholder bookmarks on the same filesystem
 // that share the same placeholder suffix but differ from toKeep.
+//
+// A bookmark whose name has the form "<S>-<placeholder>" is destroyed only if
+// no snapshot named "@<S>" currently exists on the filesystem. Placeholders are
+// designed to outlive their source snapshot — so if @<S> still exists, the
+// bookmark is much more likely a user-managed object that coincidentally shares
+// the suffix than an obsolete placeholder. Stale placeholders for not-yet-pruned
+// snapshots are collected on a subsequent run once the deleter removes the
+// source snapshot.
 func zfsGcPlaceholder(toKeep string) error {
 	arr := strings.Split(toKeep, "-")
 	if len(arr) < 2 {
 		return fmt.Errorf("%q is not a valid placeholder bookmark", toKeep)
 	}
 	placeholder := arr[len(arr)-1]
-	bookmarks, err := ZfsList([]string{"name"}, "bookmark", FSName(toKeep))
+	fs := FSName(toKeep)
+	bookmarks, err := ZfsList([]string{"name"}, "bookmark", fs)
 	if err != nil {
 		return err
 	}
+	snaps, err := ZfsList([]string{"name"}, "snapshot", fs)
+	if err != nil {
+		return err
+	}
+	existingSnaps := make(map[string]bool, len(snaps))
+	for _, s := range snaps {
+		existingSnaps[SnapshotName(s[0])] = true
+	}
+	suffix := "-" + placeholder
 	for _, b := range bookmarks {
 		if b[0] == toKeep {
 			continue
 		}
-		if strings.HasSuffix(BookmarkName(b[0]), "-"+placeholder) {
-			if err := ZfsDestroy(b[0]); err != nil {
-				return err
-			}
+		name := BookmarkName(b[0])
+		if !strings.HasSuffix(name, suffix) {
+			continue
+		}
+		snapPart := strings.TrimSuffix(name, suffix)
+		if existingSnaps[snapPart] {
+			slog.Debug("skipping GC of bookmark; source snapshot still exists",
+				"bookmark", b[0], "snap", snapPart)
+			continue
+		}
+		slog.Info("destroying obsolete placeholder bookmark", "bookmark", b[0])
+		if err := ZfsDestroy(b[0]); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -386,14 +416,4 @@ func ZfsSetPlaceholder(src, placeholderName string) error {
 		return err
 	}
 	return zfsGcPlaceholder(FSName(src) + newbm)
-}
-
-// containsStr reports whether s appears in the slice.
-func containsStr(ss []string, s string) bool {
-	for _, v := range ss {
-		if v == s {
-			return true
-		}
-	}
-	return false
 }

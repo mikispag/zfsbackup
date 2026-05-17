@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"os"
+	"runtime"
+	"runtime/debug"
 	"strings"
 
 	"github.com/mikispag/zfsbackup/internal/deleter"
@@ -11,6 +13,48 @@ import (
 	"github.com/mikispag/zfsbackup/internal/sender"
 	"github.com/mikispag/zfsbackup/internal/snapshot"
 )
+
+// version is overridable at build time via:
+//
+//	go build -ldflags "-X main.version=v1.2.3" ./cmd/zfsbackup
+//
+// When unset, it falls back to debug.ReadBuildInfo() for VCS revision.
+var version = ""
+
+func versionString() string {
+	if version != "" {
+		return version
+	}
+	bi, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "dev"
+	}
+	if bi.Main.Version != "" && bi.Main.Version != "(devel)" {
+		return bi.Main.Version
+	}
+	var rev, mod string
+	for _, s := range bi.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			rev = s.Value
+		case "vcs.modified":
+			if s.Value == "true" {
+				mod = "-dirty"
+			}
+		}
+	}
+	if rev != "" {
+		if len(rev) > 12 {
+			rev = rev[:12]
+		}
+		return rev + mod
+	}
+	return "dev"
+}
+
+func printVersion() {
+	fmt.Printf("zfsbackup %s %s/%s\n", versionString(), runtime.GOOS, runtime.GOARCH)
+}
 
 // isTerminal reports whether f is connected to a terminal.
 func isTerminal(f *os.File) bool {
@@ -48,11 +92,7 @@ func printHelp() {
 
 	// pad returns spaces so that visible text of width visLen aligns to col.
 	pad := func(visLen, col int) string {
-		n := col - visLen
-		if n < 1 {
-			n = 1
-		}
-		return strings.Repeat(" ", n)
+		return strings.Repeat(" ", max(col-visLen, 1))
 	}
 
 	// cmdLine prints "  <bold name><padding><description>" where padding is
@@ -79,7 +119,8 @@ func printHelp() {
 	)
 
 	fmt.Printf("%s\n", yellow("USAGE"))
-	fmt.Printf("  zfsbackup <command> [flags]\n\n")
+	fmt.Printf("  zfsbackup <command> [flags]\n")
+	fmt.Printf("  zfsbackup --version  %s\n\n", dim("· print version and exit"))
 
 	fmt.Printf("%s\n", yellow("COMMANDS"))
 	cmdLine("run", "Run all configured modules in sequence from a single config file")
@@ -138,14 +179,19 @@ func printHelp() {
 }
 
 func main() {
-	// Check for --help / -h before any flag parsing so we control the output.
+	// Check for --help / -h / --version / version before any flag parsing so we
+	// control the output.
 	if len(os.Args) < 2 {
 		printHelp()
 		os.Exit(0)
 	}
 	for _, arg := range os.Args[1:] {
-		if arg == "--help" || arg == "-h" || arg == "help" {
+		switch arg {
+		case "--help", "-h", "help":
 			printHelp()
+			os.Exit(0)
+		case "--version", "-V", "version":
+			printVersion()
 			os.Exit(0)
 		}
 	}

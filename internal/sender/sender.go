@@ -56,10 +56,10 @@ func (fsp *fsProcessor) PotentialSnapsToSend() []source {
 
 func (fsp *fsProcessor) ActualSnapsToSend() []source {
 	re := fsp.snapRe
-	var interesting, mandatory []source
-	seen := make(map[source]bool)
 	interestingGUIDs := make(map[string]bool)
 
+	// Pass 1: identify GUIDs of placeholder bookmarks that must also be sent so
+	// the destination accumulates the corresponding snapshots.
 	metSource := fsp.incremental.Srctype == Unknown
 	for _, s := range fsp.sources {
 		if s.GUID == fsp.incremental.GUID {
@@ -76,7 +76,15 @@ func (fsp *fsProcessor) ActualSnapsToSend() []source {
 		}
 	}
 
+	// Pass 2: walk source-ordered (createtxg-ordered) snapshots, recording
+	// matches and the index of the newest matching snap.
 	metSource = fsp.incremental.Srctype == Unknown
+	type entry struct {
+		snap    source
+		matches bool
+	}
+	var entries []entry
+	newestMatchingIdx := -1
 	for _, s := range fsp.sources {
 		if s.GUID == fsp.incremental.GUID {
 			metSource = true
@@ -85,31 +93,39 @@ func (fsp *fsProcessor) ActualSnapsToSend() []source {
 		if !metSource || s.Srctype != Snapshot {
 			continue
 		}
-		if re.MatchString(zfs.SnapshotName(s.Name)) {
-			interesting = append(interesting, s)
+		match := re.MatchString(zfs.SnapshotName(s.Name))
+		if match {
+			newestMatchingIdx = len(entries)
 		}
-		if interestingGUIDs[s.GUID] && !seen[s] {
-			seen[s] = true
-			mandatory = append(mandatory, s)
-			slog.Info("sending snapshot due to placeholder", "snap", s.Name)
-		}
+		entries = append(entries, entry{snap: s, matches: match})
 	}
 
-	if len(interesting) >= 1 {
+	// Pass 3: mark which entries to send.
+	toSend := make([]bool, len(entries))
+	for i, e := range entries {
+		if interestingGUIDs[e.snap.GUID] {
+			toSend[i] = true
+			slog.Info("sending snapshot due to placeholder", "snap", e.snap.Name)
+		}
+	}
+	if newestMatchingIdx >= 0 {
 		if fsp.job.SendIntermediate {
-			for _, x := range interesting {
-				if !seen[x] {
-					seen[x] = true
-					mandatory = append(mandatory, x)
+			for i, e := range entries {
+				if e.matches {
+					toSend[i] = true
 				}
 			}
 		} else {
-			picked := interesting[len(interesting)-1]
-			slog.Debug("sending most recent matching snapshot", "snap", picked.Name)
-			if !seen[picked] {
-				seen[picked] = true
-				mandatory = append(mandatory, picked)
-			}
+			toSend[newestMatchingIdx] = true
+			slog.Debug("sending most recent matching snapshot", "snap", entries[newestMatchingIdx].snap.Name)
+		}
+	}
+
+	// Pass 4: emit in source (createtxg) order so incremental sends are valid.
+	var mandatory []source
+	for i, e := range entries {
+		if toSend[i] {
+			mandatory = append(mandatory, e.snap)
 		}
 	}
 	return mandatory
@@ -507,8 +523,15 @@ func processFilesystem(fs string, sc *config.SenderConfig) error {
 // If limitFs is non-empty only that one filesystem is processed; pass "" to
 // process all. Per-filesystem errors are collected and returned as a joined error.
 func Run(cfg *config.Config, parallelism int, limitFs string) error {
+	if cfg.Sender == nil {
+		return fmt.Errorf("sender: no sender section in config")
+	}
 	sc := cfg.Sender
 	initSenderDefaults(sc)
+
+	if parallelism < 1 {
+		parallelism = 1
+	}
 
 	include := cfg.ResolveInclude(sc.Include)
 	exclude := cfg.ResolveExclude(sc.Exclude)
@@ -521,21 +544,18 @@ func Run(cfg *config.Config, parallelism int, limitFs string) error {
 	)
 	sem := make(chan struct{}, parallelism)
 	for _, fs := range fsToProcess {
-		fs := fs
 		if limitFs != "" && fs != limitFs {
 			continue
 		}
 		sem <- struct{}{}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			defer func() { <-sem }()
 			if err := processFilesystem(fs, sc); err != nil {
 				mu.Lock()
 				errs = append(errs, fmt.Errorf("%s: %w", fs, err))
 				mu.Unlock()
 			}
-		}()
+		})
 	}
 	wg.Wait()
 

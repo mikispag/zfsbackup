@@ -58,9 +58,9 @@ func TestMetricAsPrometheus_oneDimension(t *testing.T) {
 
 func TestMetricAsPrometheus_multipleDimensions(t *testing.T) {
 	m := metric{
-		Name:  "SomeMetric",
+		Name:       "SomeMetric",
 		Dimensions: map[string]string{"a": "1", "b": "2"},
-		Value: 99,
+		Value:      99,
 	}
 	got := m.asPrometheus()
 	if !strings.HasPrefix(got, "SomeMetric{") {

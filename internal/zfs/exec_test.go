@@ -44,7 +44,7 @@ func TestParseDuration_invalid(t *testing.T) {
 		"1",
 		"d",
 		"h",
-		"1.5d", // non-integer prefix: ParseInt fails
+		"1.5d",                 // non-integer prefix: ParseInt fails
 		"9999999999999999999d", // int64 overflow: ParseInt fails
 	}
 	for _, input := range cases {

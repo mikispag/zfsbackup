@@ -26,16 +26,14 @@ func NewGroup(ctx context.Context) (*Group, context.Context) {
 // Go runs f in a new goroutine. If f returns a non-nil error the group's
 // context is cancelled and the error is recorded (first error wins).
 func (g *Group) Go(f func() error) {
-	g.wg.Add(1)
-	go func() {
-		defer g.wg.Done()
+	g.wg.Go(func() {
 		if err := f(); err != nil {
 			g.once.Do(func() {
 				g.err = err
 				g.cancel()
 			})
 		}
-	}()
+	})
 }
 
 // Wait blocks until all goroutines have returned, then cancels the context

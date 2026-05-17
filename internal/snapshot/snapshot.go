@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"log/slog"
-	"sort"
+	"maps"
+	"slices"
 	"strconv"
 	"time"
 
@@ -70,6 +72,9 @@ func MaybeSkipSnaps(cfg *config.SnapshotConfig, fsToProcess []string) map[string
 
 // Run runs the snapshot module for the given config.
 func Run(cfg *config.Config, dryRun bool) error {
+	if cfg.Snapshot == nil {
+		return fmt.Errorf("snapshot: no snapshot section in config")
+	}
 	sc := cfg.Snapshot
 	include := cfg.ResolveInclude(sc.Include)
 	exclude := cfg.ResolveExclude(sc.Exclude)
@@ -85,14 +90,8 @@ func Run(cfg *config.Config, dryRun bool) error {
 		perPoolArgs[zfs.PoolName(fs)] = append(perPoolArgs[zfs.PoolName(fs)], fs+"@"+snapName)
 	}
 
-	sortedPools := make([]string, 0, len(perPoolArgs))
-	for pool := range perPoolArgs {
-		sortedPools = append(sortedPools, pool)
-	}
-	sort.Strings(sortedPools)
-
 	var errs []error
-	for _, pool := range sortedPools {
+	for _, pool := range slices.Sorted(maps.Keys(perPoolArgs)) {
 		poolArgs := perPoolArgs[pool]
 		args := append([]string{"snapshot"}, poolArgs...)
 		cmd := zfs.DefaultExecCommand(context.Background(), "zfs", args...)
@@ -107,11 +106,8 @@ func Run(cfg *config.Config, dryRun bool) error {
 	}
 
 	if len(fsToSkip) > 0 {
-		skipped := make([]string, 0, len(fsToSkip))
-		for fs := range fsToSkip {
-			skipped = append(skipped, fs)
-		}
-		slog.Info("skipped empty unchanged filesystems", "filesystems", skipped)
+		slog.Info("skipped empty unchanged filesystems",
+			"filesystems", slices.Sorted(maps.Keys(fsToSkip)))
 	}
 
 	return errors.Join(errs...)

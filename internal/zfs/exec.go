@@ -11,7 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -242,15 +242,9 @@ func ExpandFsToProcess(include, exclude []string) []string {
 			fsToProcess = append(fsToProcess, fields[0])
 		}
 	}
-	sort.Strings(fsToProcess)
-	// Deduplicate: overlapping include entries (e.g. "tank" and "tank/data")
-	// cause the same dataset to appear more than once after recursive listing.
-	out := fsToProcess[:0]
-	for i, fs := range fsToProcess {
-		if i == 0 || fs != fsToProcess[i-1] {
-			out = append(out, fs)
-		}
-	}
-	return out
+	// Sort and deduplicate: overlapping include entries (e.g. "tank" and
+	// "tank/data") cause the same dataset to appear more than once after
+	// recursive listing. slices.Compact requires a sorted slice.
+	slices.Sort(fsToProcess)
+	return slices.Compact(fsToProcess)
 }
-

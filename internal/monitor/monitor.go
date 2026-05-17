@@ -3,9 +3,10 @@ package monitor
 import (
 	"flag"
 	"fmt"
-	"sort"
 	"log/slog"
+	"maps"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -25,11 +26,7 @@ func (m *metric) asPrometheus() string {
 	if len(m.Dimensions) == 0 {
 		return fmt.Sprintf("%s %v", m.Name, m.Value)
 	}
-	keys := make([]string, 0, len(m.Dimensions))
-	for k := range m.Dimensions {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
+	keys := slices.Sorted(maps.Keys(m.Dimensions))
 	dim := make([]string, 0, len(keys))
 	for _, k := range keys {
 		dim = append(dim, fmt.Sprintf("%s=%q", k, m.Dimensions[k]))
@@ -161,6 +158,9 @@ func (m *mon) run() error {
 
 // Run runs the monitor module for all filesystems in cfg.
 func Run(cfg *config.Config) error {
+	if cfg.Monitor == nil {
+		return fmt.Errorf("monitor: no monitor section in config")
+	}
 	mc := cfg.Monitor
 	include := cfg.ResolveInclude(mc.Include)
 	exclude := cfg.ResolveExclude(mc.Exclude)

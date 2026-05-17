@@ -272,6 +272,29 @@ func TestActualSnapsToSend_placeholderGUID_includesMandatorySnap(t *testing.T) {
 	}
 }
 
+func TestActualSnapsToSend_placeholderNewerThanNewestMatching_preservesOrder(t *testing.T) {
+	// daily-02 matches the regex; foo-03 (newer in source order, i.e. higher
+	// createtxg) is targeted by a sync placeholder but does not match the regex.
+	// The result must list snapshots in createtxg order — daily-02 before foo-03 —
+	// so each incremental send uses a valid earlier base.
+	sources := []source{
+		{Name: "tank@daily-01", GUID: "1", Srctype: Snapshot},
+		{Name: "tank@daily-02", GUID: "2", Srctype: Snapshot},
+		{Name: "tank@foo-03", GUID: "3", Srctype: Snapshot},
+		{Name: "tank#foo-03-mypeer", GUID: "3", Srctype: Bookmark},
+	}
+	job, dst := makeConfig("daily-.*", false, []string{"mypeer"})
+	fsp := makeActualFSP(job, dst, sources, source{Srctype: Unknown})
+	got := fsp.ActualSnapsToSend()
+	if len(got) != 2 {
+		t.Fatalf("expected 2 snaps, got %d: %v", len(got), got)
+	}
+	if got[0].GUID != "2" || got[1].GUID != "3" {
+		t.Errorf("expected order [GUID=2, GUID=3] (createtxg-sorted), got [%q, %q]",
+			got[0].GUID, got[1].GUID)
+	}
+}
+
 func TestActualSnapsToSend_placeholderGUIDIsAlsoMostRecent_noDuplicate(t *testing.T) {
 	// GUID=2 is both the placeholder target and the most-recent matching snapshot.
 	// It must appear exactly once in the result.

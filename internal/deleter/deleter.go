@@ -7,7 +7,7 @@ import (
 	"log/slog"
 	"math/big"
 	"regexp"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -76,8 +76,8 @@ func (dfp *deleteFsProcessor) getValidatedSnaps() error {
 			CreateTxg: txg,
 		})
 	}
-	sort.Slice(dfp.snaps, func(i, j int) bool {
-		return dfp.snaps[i].Timestamp.Before(dfp.snaps[j].Timestamp)
+	slices.SortFunc(dfp.snaps, func(a, b snapshot) int {
+		return a.Timestamp.Compare(b.Timestamp)
 	})
 	for i := 1; i < len(dfp.snaps); i++ {
 		if dfp.snaps[i-1].CreateTxg.Cmp(&dfp.snaps[i].CreateTxg) == 1 {
@@ -88,12 +88,9 @@ func (dfp *deleteFsProcessor) getValidatedSnaps() error {
 }
 
 func (dfp *deleteFsProcessor) preserveTopN() {
-	topN := int(dfp.cfg.PreserveTopN)
-	if topN > len(dfp.snaps) {
-		topN = len(dfp.snaps)
-	}
-	for i := range dfp.snaps[len(dfp.snaps)-topN:] {
-		dfp.snaps[len(dfp.snaps)-topN+i].preserve = true
+	topN := min(int(dfp.cfg.PreserveTopN), len(dfp.snaps))
+	for i := len(dfp.snaps) - topN; i < len(dfp.snaps); i++ {
+		dfp.snaps[i].preserve = true
 	}
 }
 
@@ -213,7 +210,13 @@ func deleteManySnaps(fs string, dryRun bool, toDelete []string) error {
 // Run applies the deleter config to all matching filesystems.
 // Per-filesystem errors are collected and returned as a joined error.
 func Run(cfg *config.Config, parallelism int, dryRun bool) error {
+	if cfg.Deleter == nil {
+		return fmt.Errorf("deleter: no deleter section in config")
+	}
 	dc := cfg.Deleter
+	if parallelism < 1 {
+		parallelism = 1
+	}
 	include := cfg.ResolveInclude(dc.Include)
 	exclude := cfg.ResolveExclude(dc.Exclude)
 	// ExpandFsToProcess already returns a sorted slice; no additional sort needed.
@@ -226,11 +229,8 @@ func Run(cfg *config.Config, parallelism int, dryRun bool) error {
 	)
 	sem := make(chan struct{}, parallelism)
 	for _, fs := range fsToProcess {
-		fs := fs
 		sem <- struct{}{}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			defer func() { <-sem }()
 			dfp, err := newDeleteFsProcessor(dc, fs)
 			if err != nil {
@@ -244,7 +244,7 @@ func Run(cfg *config.Config, parallelism int, dryRun bool) error {
 				errs = append(errs, fmt.Errorf("%s: %w", fs, err))
 				mu.Unlock()
 			}
-		}()
+		})
 	}
 	wg.Wait()
 
