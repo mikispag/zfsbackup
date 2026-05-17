@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/mikispag/zfsbackup/internal/deleter"
 	"github.com/mikispag/zfsbackup/internal/monitor"
@@ -45,6 +46,33 @@ func printHelp() {
 		return s
 	}
 
+	// pad returns spaces so that visible text of width visLen aligns to col.
+	pad := func(visLen, col int) string {
+		n := col - visLen
+		if n < 1 {
+			n = 1
+		}
+		return strings.Repeat(" ", n)
+	}
+
+	// cmdLine prints "  <bold name><padding><description>" where padding is
+	// computed from the name's visible length, not its escape-inflated length.
+	cmdLine := func(name, desc string) {
+		fmt.Printf("  %s%s%s\n", bold(name), pad(len(name), 12), desc)
+	}
+
+	// flagLine prints "  <bold --flag>[=TYPE]<padding><description>".
+	// The flag name is bolded; the =TYPE suffix is plain; padding is based on
+	// the total visible width (flag + =TYPE).
+	flagLine := func(nameAndType, desc string) {
+		parts := strings.SplitN(nameAndType, "=", 2)
+		display := bold(parts[0])
+		if len(parts) > 1 {
+			display += "=" + parts[1]
+		}
+		fmt.Printf("  %s%s%s\n", display, pad(len(nameAndType), 30), desc)
+	}
+
 	fmt.Printf("%s  %s\n\n",
 		cyan("zfsbackup"),
 		dim("· automated incremental ZFS backups over SSH"),
@@ -54,70 +82,56 @@ func printHelp() {
 	fmt.Printf("  zfsbackup <command> [flags]\n\n")
 
 	fmt.Printf("%s\n", yellow("COMMANDS"))
-	commands := [][2]string{
-		{"run", "Run all configured modules in sequence from a single config file"},
-		{"snapshot", "Create ZFS snapshots on a schedule"},
-		{"sender", "Stream incremental snapshots to one or more remote receivers"},
-		{"deleter", "Prune old snapshots with configurable retention rules"},
-		{"monitor", "Export snapshot freshness metrics for Prometheus"},
-		{"receiver", "Accept snapshot streams (deployed as SSH ForceCommand)"},
-	}
-	for _, c := range commands {
-		fmt.Printf("  %-12s%s\n", bold(c[0]), c[1])
-	}
+	cmdLine("run", "Run all configured modules in sequence from a single config file")
+	cmdLine("snapshot", "Create ZFS snapshots on a schedule")
+	cmdLine("sender", "Stream incremental snapshots to one or more remote receivers")
+	cmdLine("deleter", "Prune old snapshots with configurable retention rules")
+	cmdLine("monitor", "Export snapshot freshness metrics for Prometheus")
+	cmdLine("receiver", "Accept snapshot streams (deployed as SSH ForceCommand)")
 	fmt.Println()
 
 	fmt.Printf("%s\n", yellow("RUN"))
-	fmt.Printf("  %-32s%s\n", bold("--config")+"=PATH", "Unified config file (required)")
-	fmt.Printf("  %-32s%s\n", bold("--dry-run"), "Dry-run mode for snapshot and deleter")
-	fmt.Printf("  %-32s%s\n", bold("--parallelism")+"=N", "Filesystems to process in parallel  "+dim("[default: 1]"))
-	fmt.Printf("  %-32s%s\n", bold("--debug"), "Debug logging")
+	flagLine("--config=PATH", "Unified config file (required)")
+	flagLine("--dry-run", "Dry-run mode for snapshot and deleter")
+	flagLine("--parallelism=N", "Filesystems to process in parallel  "+dim("[default: 1]"))
+	flagLine("--debug", "Debug logging")
 	fmt.Println()
 
 	fmt.Printf("%s\n", yellow("SNAPSHOT"))
-	fmt.Printf("  %-32s%s\n", bold("--config")+"=PATH", "Config file (required)")
-	fmt.Printf("  %-32s%s\n", bold("--dry-run"), "Print snapshot commands without executing")
-	fmt.Printf("  %-32s%s\n", bold("--debug"), "Debug logging")
+	flagLine("--config=PATH", "Config file (required)")
+	flagLine("--dry-run", "Print snapshot commands without executing")
+	flagLine("--debug", "Debug logging")
 	fmt.Println()
 
 	fmt.Printf("%s\n", yellow("SENDER"))
-	fmt.Printf("  %-32s%s\n", bold("--config")+"=PATH", "Config file (required)")
-	fmt.Printf("  %-32s%s\n", bold("--limit-fs")+"=DATASET", "Restrict to a single filesystem")
-	fmt.Printf("  %-32s%s\n", bold("--parallelism")+"=N", "Filesystems to process in parallel  "+dim("[default: 1]"))
-	fmt.Printf("  %-32s%s\n", bold("--debug"), "Debug logging")
+	flagLine("--config=PATH", "Config file (required)")
+	flagLine("--limit-fs=DATASET", "Restrict to a single filesystem")
+	flagLine("--parallelism=N", "Filesystems to process in parallel  "+dim("[default: 1]"))
+	flagLine("--debug", "Debug logging")
 	fmt.Println()
 
 	fmt.Printf("%s\n", yellow("DELETER"))
-	fmt.Printf("  %-32s%s\n", bold("--config")+"=PATH", "Config file (required)")
-	fmt.Printf("  %-32s%s\n", bold("--dry-run"), "Print deletions without executing  "+dim("[default: true]"))
-	fmt.Printf("  %-32s%s\n", bold("--parallelism")+"=N", "Filesystems to process in parallel  "+dim("[default: 1]"))
-	fmt.Printf("  %-32s%s\n", bold("--debug"), "Debug logging")
+	flagLine("--config=PATH", "Config file (required)")
+	flagLine("--dry-run", "Print deletions without executing  "+dim("[default: true]"))
+	flagLine("--parallelism=N", "Filesystems to process in parallel  "+dim("[default: 1]"))
+	flagLine("--debug", "Debug logging")
 	fmt.Println()
 
 	fmt.Printf("%s\n", yellow("MONITOR"))
-	fmt.Printf("  %-32s%s\n", bold("--config")+"=PATH", "Config file (required)")
-	fmt.Printf("  %-32s%s\n", bold("--debug"), "Debug logging")
+	flagLine("--config=PATH", "Config file (required)")
+	flagLine("--debug", "Debug logging")
 	fmt.Println()
 
 	fmt.Printf("%s  %s\n", yellow("RECEIVER"), dim("(SSH ForceCommand — not invoked manually)"))
-	fmt.Printf("  %-32s%s\n", bold("--config")+"=PATH", "Receiver config file (optional)")
-	fmt.Printf("  %-32s%s\n", bold("--base_dataset")+"=DATASET", "Override root destination dataset")
-	fmt.Printf("  %-32s%s\n", bold("--debug"), "Debug logging")
+	flagLine("--config=PATH", "Receiver config file (optional)")
+	flagLine("--base_dataset=DATASET", "Override root destination dataset")
+	flagLine("--debug", "Debug logging")
 	fmt.Println()
 
 	fmt.Printf("%s\n", yellow("EXAMPLES"))
-	fmt.Printf("  %s  %s\n",
-		bold("zfsbackup run"),
-		"--config /etc/zfsbackup/mypool.json",
-	)
-	fmt.Printf("  %s  %s\n",
-		bold("zfsbackup sender"),
-		"--config /etc/zfsbackup/mypool.json --limit-fs tank/important",
-	)
-	fmt.Printf("  %s  %s\n",
-		bold("zfsbackup deleter"),
-		"--config /etc/zfsbackup/mypool.json --dry-run=false",
-	)
+	fmt.Printf("  %s  --config /etc/zfsbackup/mypool.json\n", bold("zfsbackup run"))
+	fmt.Printf("  %s  --config /etc/zfsbackup/mypool.json --limit-fs tank/important\n", bold("zfsbackup sender"))
+	fmt.Printf("  %s  --config /etc/zfsbackup/mypool.json --dry-run=false\n", bold("zfsbackup deleter"))
 	fmt.Println()
 	fmt.Printf("  %s\n", dim("https://github.com/mikispag/zfsbackup"))
 	fmt.Println()
