@@ -121,18 +121,53 @@ type zfsPropValue struct {
 	Value string `json:"value"`
 }
 
-// zfsListJSON is the top-level structure returned by 'zfs list -j'.
+// zfsListJSON / zpoolListJSON capture each entry as a raw JSON object so the
+// parser can pick fields from both the top level (where zfs/zpool place names
+// like "name", "pool", "type") and from the "properties" subobject (where the
+// values for explicitly requested -o properties live). Some fields appear in
+// only one of those places depending on the ZFS version, so the parser tries
+// the properties block first and falls back to the top-level scalar.
 type zfsListJSON struct {
-	Datasets map[string]struct {
-		Properties map[string]zfsPropValue `json:"properties"`
-	} `json:"datasets"`
+	Datasets map[string]json.RawMessage `json:"datasets"`
 }
 
-// zpoolListJSON is the top-level structure returned by 'zpool list -j'.
 type zpoolListJSON struct {
-	Pools map[string]struct {
-		Properties map[string]zfsPropValue `json:"properties"`
-	} `json:"pools"`
+	Pools map[string]json.RawMessage `json:"pools"`
+}
+
+// extractProps decodes a single dataset/pool entry into a flat map of property
+// name → value. Values inside the "properties" subobject win; otherwise any
+// scalar top-level field is used as-is. This lets callers request "name" or
+// "pool" (which zfs-list keeps at the top level) alongside actual properties
+// such as "creation" or "used".
+func extractProps(raw json.RawMessage) (map[string]string, error) {
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &top); err != nil {
+		return nil, err
+	}
+	out := make(map[string]string, len(top))
+	if propsRaw, ok := top["properties"]; ok {
+		var props map[string]zfsPropValue
+		if err := json.Unmarshal(propsRaw, &props); err != nil {
+			return nil, err
+		}
+		for k, v := range props {
+			out[k] = v.Value
+		}
+	}
+	for k, v := range top {
+		if k == "properties" {
+			continue
+		}
+		if _, present := out[k]; present {
+			continue
+		}
+		var s string
+		if err := json.Unmarshal(v, &s); err == nil {
+			out[k] = s
+		}
+	}
+	return out, nil
 }
 
 // ZfsList runs "zfs list -j -p" for the given properties and object type under
@@ -190,10 +225,13 @@ func ZfsList(props []string, t string, fullds string, flags ...string) ([][]stri
 		vals map[string]string
 	}
 	entries := make([]entry, 0, len(result.Datasets))
-	for k, ds := range result.Datasets {
-		v := make(map[string]string, len(ds.Properties))
-		for pname, pval := range ds.Properties {
-			v[pname] = pval.Value
+	for k, raw := range result.Datasets {
+		v, err := extractProps(raw)
+		if err != nil {
+			return nil, fmt.Errorf("cannot parse zfs list dataset %q: %w", k, err)
+		}
+		if v["name"] == "" {
+			v["name"] = k // map key is always the full dataset name
 		}
 		entries = append(entries, entry{key: k, vals: v})
 	}
@@ -261,13 +299,13 @@ func ZpoolList(props []string) ([][]string, error) {
 		props map[string]string
 	}
 	entries := make([]entry, 0, len(result.Pools))
-	for name, pool := range result.Pools {
-		p := make(map[string]string, len(pool.Properties))
-		for k, v := range pool.Properties {
-			p[k] = v.Value
+	for name, raw := range result.Pools {
+		p, err := extractProps(raw)
+		if err != nil {
+			return nil, fmt.Errorf("cannot parse zpool list pool %q: %w", name, err)
 		}
 		if p["name"] == "" {
-			p["name"] = name // fall back to map key
+			p["name"] = name
 		}
 		entries = append(entries, entry{name: name, props: p})
 	}

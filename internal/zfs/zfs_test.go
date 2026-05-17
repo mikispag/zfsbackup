@@ -156,6 +156,76 @@ func TestParseTabular_echoOutput(t *testing.T) {
 	}
 }
 
+func TestExtractProps_topLevelAndProperties(t *testing.T) {
+	// 'zfs list -j' places "name", "pool", "type" at the top level of each
+	// dataset object and puts everything requested via -o that is a real ZFS
+	// property (creation, used, ...) inside the "properties" subobject.
+	raw := []byte(`{
+		"name": "tank/data",
+		"pool": "tank",
+		"type": "FILESYSTEM",
+		"createtxg": "42",
+		"properties": {
+			"creation": {"value": "1700000000"},
+			"used": {"value": "1024"}
+		}
+	}`)
+	got, err := extractProps(raw)
+	if err != nil {
+		t.Fatalf("extractProps error: %v", err)
+	}
+	want := map[string]string{
+		"name":      "tank/data",
+		"pool":      "tank",
+		"type":      "FILESYSTEM",
+		"createtxg": "42",
+		"creation":  "1700000000",
+		"used":      "1024",
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("extractProps[%q] = %q; want %q", k, got[k], v)
+		}
+	}
+}
+
+func TestExtractProps_propertiesWinOverTopLevel(t *testing.T) {
+	// If the same key appears at both levels (rare, but documented to be
+	// possible in some ZFS versions), the properties block is authoritative.
+	raw := []byte(`{
+		"name": "tank/data",
+		"properties": {
+			"name": {"value": "tank/data-from-props"}
+		}
+	}`)
+	got, err := extractProps(raw)
+	if err != nil {
+		t.Fatalf("extractProps error: %v", err)
+	}
+	if got["name"] != "tank/data-from-props" {
+		t.Errorf("got name=%q; want properties value", got["name"])
+	}
+}
+
+func TestExtractProps_skipsNonScalarTopLevel(t *testing.T) {
+	// Some ZFS versions add nested objects at the top level (e.g. "dataset_options").
+	// Those must not crash extraction or leak into the flat result.
+	raw := []byte(`{
+		"name": "tank",
+		"dataset_options": {"foo": "bar"}
+	}`)
+	got, err := extractProps(raw)
+	if err != nil {
+		t.Fatalf("extractProps error: %v", err)
+	}
+	if _, ok := got["dataset_options"]; ok {
+		t.Errorf("non-scalar top-level field should not appear in extracted map: %v", got)
+	}
+	if got["name"] != "tank" {
+		t.Errorf("got name=%q; want \"tank\"", got["name"])
+	}
+}
+
 func TestParseTabular_emptyOutput(t *testing.T) {
 	rows, err := ParseTabular("printf", []string{""})
 	if err != nil {
