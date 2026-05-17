@@ -445,6 +445,22 @@ Write your own alerting rules against the exported `LastSnapAge` and `LastSnapTi
 
 ---
 
+## 📥 Installation
+
+```sh
+go install github.com/mikispag/zfsbackup/cmd/zfsbackup@latest
+```
+
+Or build from source:
+
+```sh
+git clone https://github.com/mikispag/zfsbackup
+cd zfsbackup
+make build
+```
+
+---
+
 ## 🧪 Running the test suite
 
 1. Create and delegate a ZFS filesystem for tests:
