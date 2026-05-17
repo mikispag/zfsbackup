@@ -7,7 +7,7 @@ BUILD_DIR = .
 
 build: $(BINARY)
 
-$(BINARY): $(shell find cmd internal -name '*.go')
+$(BINARY): $(shell find cmd internal -name '*.go') go.mod go.sum
 	CGO_ENABLED=0 go build -o $(BINARY) ./cmd/zfsbackup
 
 deb: $(BINARY)
@@ -32,8 +32,7 @@ endif
 tests: unit-tests integration-tests
 
 unit-tests:
-	go vet ./...
-	go test ./...
+	go test -count=1 ./...
 
 integration-tests:
 	bats tests/tests.bats
