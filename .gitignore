@@ -1,0 +1,14 @@
+.vscode/**
+/zfsbackup
+tests/cover.html
+tests/fakesnaps/gensnaps
+tests/ssh/authorized_keys
+tests/ssh/known_hosts
+tests/ssh/ed25519_key
+tests/ssh/ed25519_key.pub
+tests/ssh/ssh_host_ed25519_key
+tests/ssh/ssh_host_ed25519_key.pub
+tests/ssh/sshd_config
+*.deb
+*.pkg.tar.zst
+*.pkg.tar.zst.sig

@@ -1,0 +1,6 @@
+{
+  "base_dataset": "tank/backups/myhost",
+  "disable_mount": true,
+  "enforce_local_properties": ["mountpoint"],
+  "resumable": true
+}

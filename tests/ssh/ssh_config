@@ -1,0 +1,6 @@
+UserKnownHostsFile ${SSH_TEST_PATH}/known_hosts
+IdentityFile ${SSH_TEST_PATH}/ed25519_key
+
+Host test_target
+    HostName 127.0.0.1
+    Port 62122

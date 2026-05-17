@@ -1,0 +1,43 @@
+{
+  "include": ["tank"],
+  "exclude": ["tank/scratch"],
+
+  "snapshot": {
+    "name_pattern": "snap-2006-01-02_15-04-05",
+    "skip_empty_younger_than": "30m"
+  },
+
+  "sender": {
+    "name": "backup-to-two-remotes",
+    "snapshot_re": "snap-....-..-.._..-..-..",
+    "destinations": [
+      {
+        "receiver": "ssh backup@primary-host -- ",
+        "compression": "zstd",
+        "placeholders": ["primary"]
+      },
+      {
+        "receiver": "ssh backup@offsite-host -- ",
+        "compression": "zstd",
+        "raw_send": true,
+        "placeholders": ["offsite"]
+      }
+    ]
+  },
+
+  "deleter": {
+    "regex": ["snap-....-..-.._..-..-.." ],
+    "preserve_top_n": 5,
+    "preserve_newer_than": "3h",
+    "rules": [
+      { "interval": "1h",  "count": 48, "allow_holes": true },
+      { "interval": "1d",  "count": 30, "allow_holes": true },
+      { "interval": "7d",  "count": 12 },
+      { "interval": "30d", "count": 12 }
+    ]
+  },
+
+  "monitor": {
+    "prometheus_output": "/var/lib/node_exporter/textfile_collector/zfsbackup.prom"
+  }
+}
