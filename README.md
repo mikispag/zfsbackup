@@ -467,10 +467,11 @@ make build
 
    ```sh
    zfs create mypool/zfsbackuptestsuite
-   zfs allow -ldu testsuiteuser mypool/zfsbackuptestsuite \
+   zfs allow -ldu testsuiteuser \
      bookmark,canmount,change-key,compression,create,destroy,diff,encryption,\
-     keyformat,keylocation,load-key,logbias,mount,mountpoint,promote,readonly,\
-     receive,rename,rollback,send,snapshot,userprop
+keyformat,keylocation,load-key,logbias,mount,mountpoint,promote,readonly,\
+receive,rename,rollback,send,snapshot,userprop \
+     mypool/zfsbackuptestsuite
    export DELEGATED_FS=mypool/zfsbackuptestsuite
    ```
 

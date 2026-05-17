@@ -49,7 +49,7 @@ jobs:
           sudo zpool create -f testpool /tmp/zfsbackup-pool.img
           sudo zfs create testpool/zfsbackuptestsuite
           sudo chown "$USER" /tmp/zfsbackup-pool.img
-          sudo zfs allow -ldu "$USER" testpool/zfsbackuptestsuite bookmark,canmount,change-key,compression,create,destroy,diff,encryption,keyformat,keylocation,load-key,logbias,mount,mountpoint,promote,readonly,receive,rename,rollback,send,snapshot,userprop
+          sudo zfs allow -ldu "$USER" bookmark,canmount,change-key,compression,create,destroy,diff,encryption,keyformat,keylocation,load-key,logbias,mount,mountpoint,promote,readonly,receive,rename,rollback,send,snapshot,userprop testpool/zfsbackuptestsuite
       - name: Run integration tests
         env:
           DELEGATED_FS: testpool/zfsbackuptestsuite
