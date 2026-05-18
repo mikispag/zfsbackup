@@ -8,7 +8,7 @@ on:
 
 jobs:
   build-and-test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -27,7 +27,7 @@ jobs:
       - run: CGO_ENABLED=0 go build ./cmd/zfsbackup
 
   integration-tests:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: build-and-test
     steps:
       - uses: actions/checkout@v4
