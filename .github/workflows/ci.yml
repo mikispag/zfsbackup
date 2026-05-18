@@ -8,7 +8,7 @@ on:
 
 jobs:
   build-and-test:
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -27,7 +27,7 @@ jobs:
       - run: CGO_ENABLED=0 go build ./cmd/zfsbackup
 
   integration-tests:
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-latest
     needs: build-and-test
     steps:
       - uses: actions/checkout@v4
@@ -36,12 +36,35 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: Install ZFS, bats, and helpers
+      - name: Install build deps and test helpers
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            zfsutils-linux libzfslinux-dev bats mbuffer zstd gettext-base openssh-server
+            build-essential autoconf automake libtool gawk \
+            libblkid-dev uuid-dev libudev-dev libssl-dev zlib1g-dev \
+            libaio-dev libattr1-dev libelf-dev "linux-headers-$(uname -r)" \
+            python3 python3-dev python3-setuptools python3-cffi \
+            libffi-dev python3-packaging libcurl4-openssl-dev libpam0g-dev \
+            bats mbuffer zstd gettext-base openssh-server
+      - name: Build and install OpenZFS 2.3.4
+        run: |
+          set -euo pipefail
+          ZFS_VERSION=2.3.4
+          curl -fsSL -o /tmp/zfs.tar.gz \
+            "https://github.com/openzfs/zfs/releases/download/zfs-${ZFS_VERSION}/zfs-${ZFS_VERSION}.tar.gz"
+          mkdir -p /tmp/zfs-src
+          tar -xzf /tmp/zfs.tar.gz -C /tmp/zfs-src --strip-components=1
+          cd /tmp/zfs-src
+          sh autogen.sh
+          ./configure --prefix=/usr --sysconfdir=/etc \
+            --libdir=/lib/x86_64-linux-gnu \
+            --with-udevdir=/lib/udev
+          make -s -j"$(nproc)"
+          sudo make install
+          sudo ldconfig
+          sudo depmod -a
           sudo modprobe zfs
+          zfs version
       - name: Create loopback ZFS pool
         run: |
           set -euo pipefail
