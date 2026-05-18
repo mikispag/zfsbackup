@@ -80,7 +80,7 @@ int main(int argc, char**argv){
         printf("Usage: %s creation_time from_guid to_guid snapshot_name\n", argv[0]);
         return 1;
     }
-    dmu_replay_record_t r_begin, r_end;
+    dmu_replay_record_t r_begin = {0}, r_end = {0};
     r_begin.drr_payloadlen = 0;
     r_begin.drr_type = DRR_BEGIN;
     r_begin.drr_u.drr_begin.drr_magic = DMU_BACKUP_MAGIC;
