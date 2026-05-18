@@ -181,6 +181,8 @@ systemctl enable --now zfsbackup-snapshot.timer
 
 > [!TIP]
 > `name_pattern` uses Go's reference time: `Mon Jan 2 15:04:05 MST 2006`. With ZFS delegation, no root required.
+>
+> Set `skip_empty_younger_than` (e.g. `"1h"`) to suppress new snapshots on idle datasets — a new snapshot is skipped when the most recent existing one is younger than this duration and the filesystem has not been written to since (`written=0`). Supports `s`, `m`, `h`, `d`, `w`, `y` suffixes.
 
 ---
 
@@ -356,6 +358,7 @@ The `receiver` field is the command used to invoke the receiver — typically an
 | `receiver` | 🔌 Command to invoke the receiver |
 | `raw_send` | 🔐 Use `zfs send -ecw` — receiver stores ciphertext and never sees the encryption key |
 | `compression: "zstd"` | ⚡ Compress the stream in transit (sender and receiver must agree) |
+| `compression_level` | 🎚️ Override the compressor's default level (only meaningful with `compression: "zstd"`) |
 | `mbuffer_args` | 🔄 Smooth throughput over high-latency links via [mbuffer](https://www.maier-komor.de/mbuffer.html) |
 | `placeholders` | 🔖 Override the auto-derived placeholder suffix |
 | `sync_placeholders` | 🔗 Sync placeholder bookmarks to this receiver |
@@ -380,6 +383,8 @@ command="zfsbackup receiver --base_dataset=backuppool/accounts/myhost --config=/
 | `mbuffer_args` | Buffer on the receive side for smoother throughput |
 | `enforce_local_properties` | ZFS properties to strip from the stream and set locally |
 | `disable_mount` | Pass `-u -o canmount=off` to `zfs receive` so the dataset is never mounted now or on future `zfs mount -a` / boot (default: `true`) |
+| `resumable` | ♻️ Pass `-s` to `zfs receive` so interrupted transfers can be resumed (default: `true`; must match the sender's `resumable`) |
+| `force_overwrite_datasets` | 💥 Destinations where `zfs receive -F` is permitted, allowing a full send to overwrite an existing dataset. Use only to recover from a broken incremental chain; remove each entry once recovery is complete |
 
 ```json
 {
