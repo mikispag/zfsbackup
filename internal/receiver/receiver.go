@@ -76,7 +76,7 @@ PLACEHOLDERS:
 	}
 }
 
-func incrementalSuggestion(baseds, ds string) {
+func incrementalSuggestion(baseds, ds string, cfg *config.ReceiverConfig) {
 	destinationDs := fmt.Sprintf("%s/%s", baseds, ds)
 	outp, err := zfs.ZfsList([]string{"name", "receive_resume_token"}, "filesystem", destinationDs)
 	ret := &config.IncrementalSuggestions{}
@@ -94,9 +94,16 @@ func incrementalSuggestion(baseds, ds string) {
 			ret.GUID = snapoutp[0][1]
 		}
 		// If no snapshots exist and no resume token, ret remains zero-valued
-		// (SendFull=false, no token, no last snapshot). The sender will detect
-		// this as "no common base" and skip with a warning, asking the operator
-		// to remove the destination manually if a full re-send is desired.
+		// (SendFull=false, no token, no last snapshot) and the sender skips —
+		// unless ForceOverwrite below opts this destination in to a full
+		// re-send under zfs receive -F.
+	}
+
+	for _, x := range cfg.ForceOverwriteDatasets {
+		if x == destinationDs {
+			ret.ForceOverwrite = true
+			break
+		}
 	}
 
 	out, err := json.Marshal(ret)
@@ -280,7 +287,7 @@ func Main() {
 
 	switch strings.ToLower(*op) {
 	case "incremental_suggestions":
-		incrementalSuggestion(baseDS, *dataset)
+		incrementalSuggestion(baseDS, *dataset, cfg)
 	case "set_placeholders":
 		setPlaceholders(baseDS, *dataset)
 	case "receive":

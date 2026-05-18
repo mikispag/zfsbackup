@@ -27,7 +27,9 @@ package config
 //   - LastSnapshot and GUID are non-empty: continue incrementally from the
 //     identified snapshot.
 //   - All fields are zero: the destination dataset exists but has no common
-//     base with the source; the sender skips this filesystem.
+//     base with the source; the sender skips this filesystem unless
+//     ForceOverwrite is set, in which case it transmits a full stream and
+//     the receiver applies zfs receive -F.
 type IncrementalSuggestions struct {
 	// SendFull, when true, instructs the sender to transmit a complete
 	// (non-incremental) stream. Mutually exclusive with ResumeToken.
@@ -46,6 +48,11 @@ type IncrementalSuggestions struct {
 	// snapshot and bookmark GUIDs; GUID matching is required because a snapshot
 	// may have been renamed or promoted since it was sent.
 	GUID string `json:"guid,omitempty"`
+
+	// ForceOverwrite signals that the destination is listed in the receiver's
+	// force_overwrite_datasets. When set, the sender transmits a full stream
+	// even if no common base exists, and the receiver applies zfs receive -F.
+	ForceOverwrite bool `json:"force_overwrite,omitempty"`
 }
 
 // SetPlaceholders is the JSON payload the sender writes to the receiver's

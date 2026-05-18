@@ -34,14 +34,15 @@ type source struct {
 // pair. job holds the per-job settings that are shared across all destinations;
 // dst holds the settings specific to the destination being processed.
 type fsProcessor struct {
-	fs          string
-	job         *config.SenderConfig
-	dst         *config.DestinationConfig
-	snapRe      *regexp.Regexp // compiled from job.SnapshotRegex in NewFSProcessor
-	sources     []source
-	resumeToken string
-	incremental source
-	sendFull    bool
+	fs             string
+	job            *config.SenderConfig
+	dst            *config.DestinationConfig
+	snapRe         *regexp.Regexp // compiled from job.SnapshotRegex in NewFSProcessor
+	sources        []source
+	resumeToken    string
+	incremental    source
+	sendFull       bool
+	forceOverwrite bool
 }
 
 func (fsp *fsProcessor) PotentialSnapsToSend() []source {
@@ -196,6 +197,7 @@ func (fsp *fsProcessor) GetIncrementalSuggestions() error {
 		return fmt.Errorf("cannot decode IncrementalSuggestions: %w", err)
 	}
 	slog.Debug("incremental suggestions", "suggestions", is, "fs", fsp.fs)
+	fsp.forceOverwrite = is.ForceOverwrite
 
 	if is.SendFull {
 		fsp.incremental = source{}
@@ -370,14 +372,20 @@ func (fsp *fsProcessor) GetNextAndSend() (retry bool, err error) {
 	fsp.resumeToken = ""
 	fsp.incremental = source{}
 	fsp.sendFull = false
+	fsp.forceOverwrite = false
 
 	if err := fsp.GetIncrementalSuggestions(); err != nil {
 		return false, err
 	}
 
 	if !fsp.sendFull && fsp.resumeToken == "" && fsp.incremental.Srctype == Unknown {
-		slog.Warn("receiver has dataset with no common base; skipping — remove the empty destination manually to enable full backup", "fs", fsp.fs)
-		return false, nil
+		if fsp.forceOverwrite {
+			slog.Info("receiver has dataset with no common base; sending full stream because destination is in force_overwrite_datasets", "fs", fsp.fs)
+			fsp.sendFull = true
+		} else {
+			slog.Warn("receiver has dataset with no common base; skipping — remove the empty destination manually to enable full backup", "fs", fsp.fs)
+			return false, nil
+		}
 	}
 
 	if fsp.resumeToken != "" {
