@@ -394,6 +394,22 @@ command="zfsbackup receiver --base_dataset=backuppool/accounts/myhost --config=/
 }
 ```
 
+### Recovering a broken incremental chain
+
+If the incremental chain to a specific dataset is broken — e.g. the source was destroyed and recreated, so the destination's last snapshot has no matching GUID on the sender — list that dataset under `force_overwrite_datasets`. The next sender run transmits a full stream and the receiver applies `zfs receive -F`, replacing the destination.
+
+```json
+{
+  "base_dataset": "tank/backups/myhost",
+  "force_overwrite_datasets": [
+    "tank/backups/myhost/mypool/data"
+  ]
+}
+```
+
+> [!WARNING]
+> Remove each entry as soon as the affected dataset has been re-sent successfully. Leaving it in place permanently disables the safety check that prevents accidental overwrites if the chain breaks again later.
+
 ---
 
 ## 📊 Monitor
