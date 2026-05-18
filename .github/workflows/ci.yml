@@ -40,7 +40,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            zfsutils-linux bats mbuffer zstd gettext-base openssh-server
+            zfsutils-linux libzfslinux-dev bats mbuffer zstd gettext-base openssh-server
           sudo modprobe zfs
       - name: Create loopback ZFS pool
         run: |
