@@ -5,7 +5,6 @@
 #include <string.h>
 #include <stddef.h>
 #include <time.h>
-#include <sys/stdtypes.h>
 #include <sys/time.h>
 #include <libzfs_core.h>
 #include <libzfs/sys/bitops.h>
