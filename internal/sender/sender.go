@@ -365,7 +365,7 @@ func (fsp *fsProcessor) ProcessFs() error {
 	if err := fsp.FillSources(); err != nil {
 		return err
 	}
-	if len(fsp.PotentialSnapsToSend()) == 0 {
+	if len(fsp.ActualSnapsToSend()) == 0 {
 		return fsp.sendPlaceholders()
 	}
 	retriesLeft := 20
@@ -404,8 +404,22 @@ func (fsp *fsProcessor) GetNextAndSend() (retry bool, err error) {
 	}
 
 	if fsp.resumeToken != "" {
-		sendArgs := []string{"send", "-t", fsp.resumeToken}
+		sendArgs := []string{"send"}
+		if fsp.dst.RawSend {
+			sendArgs = append(sendArgs, "-w")
+		}
+		sendArgs = append(sendArgs, "-t", fsp.resumeToken)
+		snap, err := fsp.resumeSnapshot(sendArgs)
+		if err != nil {
+			return false, err
+		}
+		if err := fsp.setPlaceholdersBefore(snap); err != nil {
+			return false, err
+		}
 		if err := fsp.send(sendArgs, false); err != nil {
+			return false, err
+		}
+		if err := fsp.setPlaceholdersAfter(snap); err != nil {
 			return false, err
 		}
 		return true, nil
@@ -443,6 +457,44 @@ func (fsp *fsProcessor) GetNextAndSend() (retry bool, err error) {
 		return false, err
 	}
 	return false, nil
+}
+
+// resumeSnapshot resolves an untrusted receiver token without transmitting data.
+// OpenZFS -nP reports the actual GUID-resolved target on stdout; the token's
+// embedded toname alone is insufficient because snapshots may have been renamed.
+func (fsp *fsProcessor) resumeSnapshot(sendArgs []string) (source, error) {
+	args := append([]string{"send", "-nP"}, sendArgs[1:]...)
+	out, err := zfs.DefaultExecCommand(context.Background(), "zfs", args...).Output()
+	if err != nil {
+		return source{}, fmt.Errorf("cannot inspect resume token for %s: %w", fsp.fs, err)
+	}
+	target := ""
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Split(line, "\t")
+		index := 0
+		switch fields[0] {
+		case "full":
+			index = 1
+		case "incremental":
+			index = 2
+		default:
+			continue
+		}
+		if len(fields) <= index || fields[index] == "" || target != "" {
+			return source{}, fmt.Errorf("ambiguous resume target for %s", fsp.fs)
+		}
+		target = fields[index]
+	}
+	// Older matching snapshots remain eligible for resumption even when a newer
+	// snapshot has appeared since interruption. Placeholder targets are eligible
+	// under the same exception used for ordinary incremental sends.
+	allowed := append(fsp.PotentialSnapsToSend(), fsp.ActualSnapsToSend()...)
+	for _, snap := range allowed {
+		if snap.Name == target && zfs.FSName(snap.Name) == fsp.fs {
+			return snap, nil
+		}
+	}
+	return source{}, fmt.Errorf("resume target %q is not an eligible snapshot of %s", target, fsp.fs)
 }
 
 // NewFSProcessor creates an fsProcessor for the given filesystem, job-level
@@ -579,13 +631,16 @@ func Run(cfg *config.Config, parallelism int, limitFs string) error {
 
 	include := cfg.ResolveInclude(sc.Include)
 	exclude := cfg.ResolveExclude(sc.Exclude)
-	fsToProcess := zfs.ExpandFsToProcess(include, exclude)
+	fsToProcess, discoveryErr := zfs.ExpandFsToProcess(include, exclude)
 
 	var (
 		mu   sync.Mutex
 		errs []error
 		wg   sync.WaitGroup
 	)
+	if discoveryErr != nil {
+		errs = append(errs, discoveryErr)
+	}
 	sem := make(chan struct{}, parallelism)
 	for _, fs := range fsToProcess {
 		if limitFs != "" && fs != limitFs {
@@ -619,7 +674,8 @@ func Main() {
 	}
 
 	cfg := &config.Config{}
-	zfs.LoadConfig(*configFile, cfg)
+	lock := zfs.LoadConfig(*configFile, cfg)
+	defer lock.Close()
 	if cfg.Sender == nil {
 		zfs.Fatal("no sender section in config")
 	}

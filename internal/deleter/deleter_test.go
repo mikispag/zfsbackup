@@ -231,7 +231,7 @@ func TestMarkForPreservation_invalidPreserveNewerThan_returnsError(t *testing.T)
 }
 
 func TestMarkForPreservation_snapOutsideRetentionWindow_skipped(t *testing.T) {
-	// A snapshot older than the retention window produces intervalIdx >= len(intervals)
+	// A snapshot older than the retention window produces intervalIdx >= Count
 	// and must be skipped (not preserved, not an error).
 	base := time.Unix(1_000_000, 0)
 	snaps := []snapshot{
@@ -320,10 +320,9 @@ func TestMarkForPreservation_intervalRule_keepsOnePerDay(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	preserved := 24 - len(toDelete)
-	// The rule keeps 1 per day for 3 days; interval 0 (current day) is also filled.
-	// Total preserved = intervals that are covered (at most 4 since Count+1 slots).
-	if preserved < 1 || preserved > 4 {
-		t.Errorf("got %d preserved snaps; want between 1 and 4 for a 3-day daily rule", preserved)
+	// All snapshots occupy the newest bucket; only its latest snapshot is kept.
+	if preserved != 1 || !dfp.snaps[len(dfp.snaps)-1].preserve {
+		t.Errorf("got %d preserved snaps; want only the latest snapshot", preserved)
 	}
 }
 

@@ -38,7 +38,8 @@ func runMain() {
 	}
 
 	cfg := &config.Config{}
-	zfs.LoadConfig(*configFile, cfg)
+	lock := zfs.LoadConfig(*configFile, cfg)
+	defer lock.Close()
 
 	var errs []error
 

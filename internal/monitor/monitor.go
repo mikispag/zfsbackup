@@ -89,12 +89,14 @@ func (m *mon) lastSnapMetricsOneFS(fs string) error {
 		slog.Error("cannot list snapshots", "fs", fs, "err", err)
 		return err
 	}
-	if len(found) == 0 {
-		return nil
-	}
-	unixtime, err := strconv.ParseInt(found[0][0], 10, 64)
-	if err != nil {
-		return fmt.Errorf("cannot parse snapshot creation time: %w", err)
+	// A zero timestamp keeps snapshot-less filesystems visible to freshness
+	// alerts instead of silently omitting their metrics.
+	var unixtime int64
+	if len(found) != 0 {
+		unixtime, err = strconv.ParseInt(found[0][0], 10, 64)
+		if err != nil {
+			return fmt.Errorf("cannot parse snapshot creation time: %w", err)
+		}
 	}
 	now := time.Now()
 	m.metrics = append(m.metrics,
@@ -106,7 +108,11 @@ func (m *mon) lastSnapMetricsOneFS(fs string) error {
 
 func (m *mon) lastSnapMetrics() error {
 	var errs []string
-	for _, fs := range zfs.ExpandFsToProcess(m.cfg.Include, m.cfg.Exclude) {
+	filesystems, err := zfs.ExpandFsToProcess(m.cfg.Include, m.cfg.Exclude)
+	if err != nil {
+		errs = append(errs, err.Error())
+	}
+	for _, fs := range filesystems {
 		if err := m.lastSnapMetricsOneFS(fs); err != nil {
 			errs = append(errs, fmt.Sprintf("%s: %v", fs, err))
 		}
@@ -170,6 +176,11 @@ func (m *mon) run() error {
 	if err := m.lastSnapMetrics(); err != nil {
 		errs = append(errs, err.Error())
 	}
+	success := int64(1)
+	if len(errs) != 0 {
+		success = 0
+	}
+	m.metrics = append(m.metrics, metric{Name: "MonitorSuccess", Value: success, EvalTimestamp: time.Now()})
 	output := m.asPrometheus()
 	if filePath := m.cfg.PrometheusOutput; filePath != "" {
 		if err := writePrometheusFile(filePath, output); err != nil {
@@ -213,7 +224,8 @@ func Main() {
 	}
 
 	cfg := &config.Config{}
-	zfs.LoadConfig(*configFile, cfg)
+	lock := zfs.LoadConfig(*configFile, cfg)
+	defer lock.Close()
 	if cfg.Monitor == nil {
 		zfs.Fatal("no monitor section in config")
 	}

@@ -23,7 +23,7 @@ func IsValidPlaceholder(name string) bool {
 
 // IsValidZFSDataset returns an error if name is not a valid ZFS dataset path.
 func IsValidZFSDataset(name string) error {
-	if !dsRegexp.MatchString(name) {
+	if !dsRegexp.MatchString(name) || strings.HasPrefix(name, "-") {
 		return fmt.Errorf("%q is not a valid ZFS dataset name", name)
 	}
 	for _, component := range strings.Split(name, "/") {
@@ -34,9 +34,21 @@ func IsValidZFSDataset(name string) error {
 	return nil
 }
 
+// IsValidZFSComponent validates a snapshot or bookmark name without its dataset.
+// Unlike a dataset operand, this component may start with a hyphen.
+func IsValidZFSComponent(name string) error {
+	if !dsRegexp.MatchString(name) || strings.ContainsRune(name, '/') || name == "." || name == ".." {
+		return fmt.Errorf("%q is not a valid ZFS name component", name)
+	}
+	return nil
+}
+
 // ZfsCreate creates a new ZFS filesystem.
 // If disableMount is true the dataset is created with canmount=off.
 func ZfsCreate(fs string, disableMount bool) error {
+	if err := IsValidZFSDataset(fs); err != nil {
+		return err
+	}
 	args := []string{"create"}
 	if disableMount {
 		args = append(args, "-o", "canmount=off")
@@ -48,6 +60,9 @@ func ZfsCreate(fs string, disableMount bool) error {
 
 // ZfsGet returns the value of a single ZFS property on a dataset.
 func ZfsGet(fs, prop string) (string, error) {
+	if err := IsValidZFSDataset(FSName(fs)); err != nil {
+		return "", err
+	}
 	b, err := DefaultExecCommand(context.Background(), "zfs", "get", "-H", "-o", "value", prop, fs).Output()
 	return string(b), err
 }
@@ -55,6 +70,9 @@ func ZfsGet(fs, prop string) (string, error) {
 // ZfsDestroy destroys a ZFS dataset or snapshot.
 // Additional flags (e.g. "-r", "-d", "-v") may be passed via flags.
 func ZfsDestroy(target string, flags ...string) error {
+	if err := IsValidZFSDataset(FSName(target)); err != nil {
+		return err
+	}
 	args := append([]string{"destroy"}, flags...)
 	args = append(args, target)
 	_, err := DefaultExecCommand(context.Background(), "zfs", args...).Output()
@@ -185,6 +203,9 @@ func extractProps(raw json.RawMessage) (map[string]string, error) {
 // rows are sorted in Go. This is necessary because JSON object keys are
 // unordered; the ZFS-side sort order is not preserved in the parsed output.
 func ZfsList(props []string, t string, fullds string, flags ...string) ([][]string, error) {
+	if err := IsValidZFSDataset(FSName(fullds)); err != nil {
+		return nil, err
+	}
 	// Identify sort key and direction; strip -s/-S from the command so ZFS
 	// does not waste time sorting output whose order we will discard.
 	sortKey, descending := "", false
@@ -226,6 +247,9 @@ func ZfsList(props []string, t string, fullds string, flags ...string) ([][]stri
 	if err := json.Unmarshal(out, &result); err != nil {
 		return nil, fmt.Errorf("cannot parse zfs list output: %w", err)
 	}
+	if result.Datasets == nil {
+		return nil, fmt.Errorf("zfs list output has no datasets object")
+	}
 
 	type entry struct {
 		key  string // JSON map key (dataset name), used as sort fallback
@@ -239,6 +263,11 @@ func ZfsList(props []string, t string, fullds string, flags ...string) ([][]stri
 		}
 		if v["name"] == "" {
 			v["name"] = k // map key is always the full dataset name
+		}
+		for _, prop := range reqProps {
+			if _, ok := v[prop]; !ok {
+				return nil, fmt.Errorf("zfs list dataset %q is missing property %q", k, prop)
+			}
 		}
 		entries = append(entries, entry{key: k, vals: v})
 	}
@@ -300,6 +329,9 @@ func ZpoolList(props []string) ([][]string, error) {
 	if err := json.Unmarshal(out, &result); err != nil {
 		return nil, fmt.Errorf("cannot parse zpool list output: %w", err)
 	}
+	if result.Pools == nil {
+		return nil, fmt.Errorf("zpool list output has no pools object")
+	}
 
 	type entry struct {
 		name  string
@@ -313,6 +345,11 @@ func ZpoolList(props []string) ([][]string, error) {
 		}
 		if p["name"] == "" {
 			p["name"] = name
+		}
+		for _, prop := range props {
+			if _, ok := p[prop]; !ok {
+				return nil, fmt.Errorf("zpool list pool %q is missing property %q", name, prop)
+			}
 		}
 		entries = append(entries, entry{name: name, props: p})
 	}
@@ -473,8 +510,8 @@ func placeholderSourceName(src, placeholderName string) (string, error) {
 	if err := IsValidZFSDataset(parts[0]); err != nil {
 		return "", err
 	}
-	if err := IsValidZFSDataset(parts[1]); err != nil || strings.Contains(parts[1], "/") {
-		return "", fmt.Errorf("invalid snapshot or bookmark component %q", parts[1])
+	if err := IsValidZFSComponent(parts[1]); err != nil {
+		return "", err
 	}
 	return parts[1], nil
 }

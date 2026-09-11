@@ -10,7 +10,6 @@ import (
 	"os"
 	"slices"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/mikispag/zfsbackup/internal/config"
@@ -79,12 +78,17 @@ func Run(cfg *config.Config, dryRun bool) error {
 	}
 	sc := cfg.Snapshot
 	snapName := time.Now().Format(sc.NamePattern)
-	if err := zfs.IsValidZFSDataset(snapName); err != nil || strings.ContainsRune(snapName, '/') {
+	if err := zfs.IsValidZFSComponent(snapName); err != nil {
 		return fmt.Errorf("snapshot: invalid snapshot name %q", snapName)
+	}
+	if sc.SkipEmptyYoungerThan != "" {
+		if _, err := zfs.ParseDuration(sc.SkipEmptyYoungerThan); err != nil {
+			return fmt.Errorf("snapshot: invalid skip_empty_younger_than: %w", err)
+		}
 	}
 	include := cfg.ResolveInclude(sc.Include)
 	exclude := cfg.ResolveExclude(sc.Exclude)
-	fsToProcess := zfs.ExpandFsToProcess(include, exclude)
+	fsToProcess, discoveryErr := zfs.ExpandFsToProcess(include, exclude)
 	fsToSkip := MaybeSkipSnaps(sc, fsToProcess)
 
 	perPoolArgs := make(map[string][]string)
@@ -95,7 +99,7 @@ func Run(cfg *config.Config, dryRun bool) error {
 		perPoolArgs[zfs.PoolName(fs)] = append(perPoolArgs[zfs.PoolName(fs)], fs+"@"+snapName)
 	}
 
-	var errs []error
+	errs := []error{discoveryErr}
 	for _, pool := range slices.Sorted(maps.Keys(perPoolArgs)) {
 		poolArgs := perPoolArgs[pool]
 		args := append([]string{"snapshot"}, poolArgs...)
@@ -130,7 +134,8 @@ func Main() {
 	}
 
 	cfg := &config.Config{}
-	zfs.LoadConfig(*configFile, cfg)
+	lock := zfs.LoadConfig(*configFile, cfg)
+	defer lock.Close()
 	if cfg.Snapshot == nil {
 		zfs.Fatal("no snapshot section in config")
 	}

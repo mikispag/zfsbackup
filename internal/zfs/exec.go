@@ -5,6 +5,7 @@ package zfs
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -150,20 +151,20 @@ func FatalIfError(err error, txt string) {
 }
 
 // LoadConfig reads, exclusively flocks, and JSON-decodes the config file at
-// filePath into v (which must be a pointer). Unknown fields cause a fatal
-// error. Calls FatalIfError on any failure.
-func LoadConfig(filePath string, v any) {
+// filePath into v (which must be a pointer). The caller must close the returned
+// file after completing its work; closing releases the lock. Unknown fields
+// and loading failures are fatal errors.
+func LoadConfig(filePath string, v any) *os.File {
 	f, err := os.Open(filePath)
 	FatalIfError(err, "cannot open config file: %w")
-	defer f.Close()
 	FatalIfError(syscall.Flock(int(f.Fd()), syscall.LOCK_EX), "cannot lock config file: %w")
-	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN) // unlock errors are benign; file closes immediately after
 	d := json.NewDecoder(f)
 	d.DisallowUnknownFields()
 	FatalIfError(d.Decode(v), "cannot parse config: %w")
 	if err := d.Decode(new(any)); err != io.EOF {
 		Fatal("config must contain exactly one JSON value", "err", err)
 	}
+	return f
 }
 
 // MaybeMbuffer wraps input with mbuffer when mbufferArgs is non-empty.
@@ -246,17 +247,30 @@ func CompressionProg(t string) (string, error) {
 
 // ExpandFsToProcess lists all ZFS filesystems that match include but not
 // exclude, sorted so that parent datasets appear before their children.
-func ExpandFsToProcess(include, exclude []string) []string {
+// Valid roots are still returned when discovery of another root fails.
+func ExpandFsToProcess(include, exclude []string) ([]string, error) {
+	for _, names := range [][]string{include, exclude} {
+		for _, name := range names {
+			if err := IsValidZFSDataset(name); err != nil {
+				return nil, err
+			}
+		}
+	}
 	var fsToProcess []string
+	var errs []error
 	for _, rootFS := range include {
-		FatalIfError(IsValidZFSDataset(rootFS), "invalid dataset name %w")
 		outp, err := ZfsList([]string{"name"}, "filesystem", rootFS, "-r")
-		FatalIfError(err, "%w: cannot list filesystems under "+rootFS)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("cannot list filesystems under %s: %w", rootFS, err))
+			continue
+		}
 	FOUNDFS:
 		for _, fields := range outp {
-			FatalIfError(IsValidZFSDataset(fields[0]), "invalid dataset name %w")
+			if err := IsValidZFSDataset(fields[0]); err != nil {
+				errs = append(errs, err)
+				continue
+			}
 			for _, exclusion := range exclude {
-				FatalIfError(IsValidZFSDataset(exclusion), "invalid dataset name %w")
 				if fields[0] == exclusion || strings.HasPrefix(fields[0], exclusion+"/") {
 					continue FOUNDFS
 				}
@@ -268,5 +282,5 @@ func ExpandFsToProcess(include, exclude []string) []string {
 	// "tank/data") cause the same dataset to appear more than once after
 	// recursive listing. slices.Compact requires a sorted slice.
 	slices.Sort(fsToProcess)
-	return slices.Compact(fsToProcess)
+	return slices.Compact(fsToProcess), errors.Join(errs...)
 }

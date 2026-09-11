@@ -34,6 +34,9 @@ type deleteFsProcessor struct {
 }
 
 func newDeleteFsProcessor(dc *config.DeleterConfig, fs string) (*deleteFsProcessor, error) {
+	if err := validateRetentionConfig(dc); err != nil {
+		return nil, err
+	}
 	dfp := &deleteFsProcessor{fs: fs, cfg: dc}
 	for _, r := range dc.Regex {
 		re, err := regexp.Compile(r)
@@ -43,6 +46,27 @@ func newDeleteFsProcessor(dc *config.DeleterConfig, fs string) (*deleteFsProcess
 		dfp.regexps = append(dfp.regexps, re)
 	}
 	return dfp, nil
+}
+
+func validateRetentionConfig(dc *config.DeleterConfig) error {
+	if dc.PreserveTopN < 0 {
+		return fmt.Errorf("preserve_top_n must not be negative")
+	}
+	if dc.PreserveNewerThan != "" {
+		if _, err := zfs.ParseDuration(dc.PreserveNewerThan); err != nil {
+			return fmt.Errorf("invalid preserve_newer_than: %w", err)
+		}
+	}
+	for _, rule := range dc.Rules {
+		interval, err := zfs.ParseDuration(rule.Interval)
+		if err != nil {
+			return fmt.Errorf("invalid retention interval: %w", err)
+		}
+		if interval <= 0 || rule.Count <= 0 {
+			return fmt.Errorf("retention interval and count must be positive: %v", rule)
+		}
+	}
+	return nil
 }
 
 func (dfp *deleteFsProcessor) getValidatedSnaps() error {
@@ -122,8 +146,8 @@ func (dfp *deleteFsProcessor) preserveNewerThan() error {
 // the names of snapshots that should be deleted. dfp.snaps must already be
 // populated. This is separated from ProcessFs so it can be tested without ZFS.
 func (dfp *deleteFsProcessor) markForPreservation() ([]string, error) {
-	if dfp.cfg.PreserveTopN < 0 {
-		return nil, fmt.Errorf("preserve_top_n must not be negative")
+	if err := validateRetentionConfig(dfp.cfg); err != nil {
+		return nil, err
 	}
 	if len(dfp.snaps) == 0 {
 		return nil, nil
@@ -221,16 +245,20 @@ func Run(cfg *config.Config, parallelism int, dryRun bool) error {
 	}
 	dc := cfg.Deleter
 	if parallelism < 1 {
-		parallelism = 1
+		return fmt.Errorf("parallelism must be positive")
+	}
+	processor, err := newDeleteFsProcessor(dc, "")
+	if err != nil {
+		return err
 	}
 	include := cfg.ResolveInclude(dc.Include)
 	exclude := cfg.ResolveExclude(dc.Exclude)
 	// ExpandFsToProcess already returns a sorted slice; no additional sort needed.
-	fsToProcess := zfs.ExpandFsToProcess(include, exclude)
+	fsToProcess, discoveryErr := zfs.ExpandFsToProcess(include, exclude)
 
 	var (
 		mu   sync.Mutex
-		errs []error
+		errs = []error{discoveryErr}
 		wg   sync.WaitGroup
 	)
 	sem := make(chan struct{}, parallelism)
@@ -238,13 +266,8 @@ func Run(cfg *config.Config, parallelism int, dryRun bool) error {
 		sem <- struct{}{}
 		wg.Go(func() {
 			defer func() { <-sem }()
-			dfp, err := newDeleteFsProcessor(dc, fs)
-			if err != nil {
-				mu.Lock()
-				errs = append(errs, fmt.Errorf("%s: %w", fs, err))
-				mu.Unlock()
-				return
-			}
+			dfp := *processor
+			dfp.fs = fs
 			if err := dfp.ProcessFs(dryRun); err != nil {
 				mu.Lock()
 				errs = append(errs, fmt.Errorf("%s: %w", fs, err))
@@ -270,7 +293,8 @@ func Main() {
 	}
 
 	cfg := &config.Config{}
-	zfs.LoadConfig(*configFile, cfg)
+	lock := zfs.LoadConfig(*configFile, cfg)
+	defer lock.Close()
 	if cfg.Deleter == nil {
 		zfs.Fatal("no deleter section in config")
 	}

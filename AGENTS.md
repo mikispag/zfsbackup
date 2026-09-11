@@ -29,7 +29,7 @@ Makefile
 
 ## Technology Stack
 
-- **Go 1.22** — no CGO, statically linked binary, zero external dependencies
+- **Go 1.25** — no CGO, statically linked binary, zero external dependencies
 - **encoding/json** (stdlib) — config files and internal IPC (sender↔receiver) use JSON
 - **log/slog** (stdlib) — structured logging to stderr via `slog.NewTextHandler`; level and source file/line controlled by `SetupLogger(debug)`
 - **ZFS** — invoked as external processes (`zfs`, `zpool`, `mbuffer`, `zstd`); binaries are located once at startup and cached
@@ -65,7 +65,7 @@ The receiver uses a separate JSON file (`config.ReceiverConfig`), not `config.Co
 
 ### Config Loading Pattern
 
-All modules that load a config call `zfs.LoadConfig(path, v)`, which opens the file, acquires an exclusive `flock`, and JSON-decodes it with `DisallowUnknownFields`. This prevents two concurrent invocations from racing and catches config typos. The Receiver is the exception — its config is optional (`if *configFile != ""`), and it does not flock (it runs as an SSH `ForceCommand` and is never invoked concurrently on the same config). The receiver loads its config manually with `json.NewDecoder` + `DisallowUnknownFields`.
+All modules that load a config call `zfs.LoadConfig(path, v)`, which opens the file, acquires an exclusive `flock`, and JSON-decodes it with `DisallowUnknownFields`. The caller retains the returned `*os.File` and defers its `Close()` until the job completes. This serializes invocations using the same config inode and catches config typos. An atomically replaced config or a different config file has a separate lock. The Receiver is the exception — its config is optional (`if *configFile != ""`), read-only, and shared by concurrent SSH receivers. It loads its config manually with `json.NewDecoder` + `DisallowUnknownFields`. Both loaders reject trailing JSON values.
 
 ### Duration Strings
 
@@ -108,7 +108,7 @@ Applies a single retention policy to all filesystems resolved from the config's 
 
 **Config field**: `cfg.Sender` (`*config.SenderConfig`)
 **Typical schedule**: hourly
-**Exported function**: `sender.Run(cfg *config.Config, parallelism int) error`
+**Exported function**: `sender.Run(cfg *config.Config, parallelism int, limitFs string) error`
 
 For each included filesystem, the sender:
 1. Calls the receiver with `--op=incremental_suggestions` to learn the current state of the destination (last snapshot GUID, resume token, or "send full").
@@ -170,7 +170,7 @@ All modules import `internal/zfs`. Key exports:
 
 | Symbol | Purpose |
 |---|---|
-| `LoadConfig(path, v any)` | Open, flock, JSON-decode (DisallowUnknownFields) a config file |
+| `LoadConfig(path, v any)` | Open, flock, JSON-decode; caller closes the returned file after the job |
 | `FatalIfError(err, format)` | Log fatal + exit if err != nil; format must contain `%w` |
 | `MyFatalFn(v)` / `MyFatalFnF(fmt, args)` | Log fatal message + exit |
 | `SetupLogger(debug bool)` | Configure slog text handler on stderr with source annotation |
@@ -179,7 +179,7 @@ All modules import `internal/zfs`. Key exports:
 | `ParseDuration(s)` | Parse `"30m"`, `"7d"`, `"1w"`, etc. |
 | `ZfsList(props, type, dataset, flags...)` | Run `zfs list -j -p`, parse JSON, sort, return rows |
 | `ZpoolList(props)` | Run `zpool list -j -p`, parse JSON, return rows sorted by pool name |
-| `ExpandFsToProcess(include, exclude)` | List all filesystems under `include` minus `exclude`, sorted |
+| `ExpandFsToProcess(include, exclude)` | Return sorted discovered filesystems and joined discovery errors; validate all filters first |
 | `IsValidZFSDataset(name)` | Validate a dataset name (no path traversal, no special chars) |
 | `MaybeMbuffer(ctx, args, reader)` | Wrap reader with mbuffer if args non-empty |
 | `MaybeCompress(ctx, type, level *int, reader)` | Wrap reader with zstd compressor |
@@ -258,7 +258,7 @@ Unit tests create `deleteFsProcessor` and `fsProcessor` structs directly — the
 
 3. **Never break the incremental chain**: if you remove placeholder bookmark logic or change the GUID-matching in `ActualSnapsToSend`, the sender will fall back to full sends, which can be extremely expensive. Verify with the existing `ActualSnapsToSend` tests before changing selection logic.
 
-4. **Config files are flocked**: multiple concurrent invocations of the same module are safe because `LoadConfig` holds an exclusive lock for the duration of the read. Do not open config files outside `LoadConfig`.
+4. **Config files are flocked**: keep the `*os.File` returned by `LoadConfig` open until the entire job completes. This serializes jobs using the same config inode. Different config files or atomic file replacement do not share that lock. The read-only receiver config remains exempt.
 
 5. **JSON format, not prototext**: config files are parsed with `encoding/json`. Field names are JSON snake_case as defined in the struct tags. Unknown fields cause a parse error (`DisallowUnknownFields`).
 

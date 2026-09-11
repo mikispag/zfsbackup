@@ -45,6 +45,7 @@ func fakeBookmarkZFS(t *testing.T) string {
 case "$1" in
 bookmark) printf '%s\n' "$@" > "$TEST_ZFS_CALL"; exit "$TEST_ZFS_BOOKMARK_EXIT" ;;
 list) case "$*" in
+  *missing*) exit 1 ;;
   *"-t snapshot"*) printf '%s\n' "$TEST_ZFS_SNAPSHOTS" ;;
   *) printf '%s\n' "$TEST_ZFS_LIST" ;;
 esac ;;

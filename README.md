@@ -128,6 +128,8 @@ systemctl enable --now zfsbackup.timer
 
 The top-level `include` and `exclude` fields provide defaults inherited by all modules. Individual module sections may override them with their own `include`/`exclude`.
 
+Each invocation holds an exclusive lock on its config file until its work finishes, serializing processes that use the same file. Different config files need scheduling coordination if they manage the same datasets or placeholder suffixes. Receiver invocations do not lock their config file, allowing different datasets to receive in parallel.
+
 ---
 
 ## 📸 Snapshot
@@ -465,12 +467,16 @@ systemctl enable --now zfsbackup-monitor.timer
 
 Write your own alerting rules against the exported `LastSnapAge` and `LastSnapTimestamp` metrics.
 
+A filesystem with no snapshots exports `LastSnapTimestamp=0` and `LastSnapAge` as the seconds since the Unix epoch, so ordinary freshness thresholds still alert. `MonitorSuccess` is `1` when all configured metrics were collected and `0` when any collection failed. Alert on `MonitorSuccess == 0` as well: the monitor publishes the metrics it could collect and exits unsuccessfully if a pool or dataset query fails.
+
 > [!NOTE]
 > No root required if `zpool` is in PATH. On many distributions it is root-only — check yours.
 
 ---
 
 ## 📥 Installation
+
+Building requires Go 1.25 or newer. Both hosts need OpenZFS 2.3 or newer: zfsbackup uses the JSON command output [introduced in OpenZFS 2.3](https://github.com/openzfs/zfs/releases/tag/zfs-2.3.0). Install `zstd` for compressed transfers and `mbuffer` when configuring buffering.
 
 ```sh
 go install github.com/mikispag/zfsbackup/cmd/zfsbackup@latest

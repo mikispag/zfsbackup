@@ -969,14 +969,67 @@ EOM
 HasBrokenPool 0
 # HELP LastSnapAge zfsbackup metric
 # TYPE LastSnapAge untyped
+LastSnapAge\{fs="$TESTFS/sender/mypool"\} [0-9]{10}
 LastSnapAge\{fs="$TESTFS/sender/mypool/fs1"\} 34560.
 LastSnapAge\{fs="$TESTFS/sender/mypool/fs2"\} 17280.
 LastSnapAge\{fs="$TESTFS/sender/mypool/fs2/sub"\} 17280.
 # HELP LastSnapTimestamp zfsbackup metric
 # TYPE LastSnapTimestamp untyped
+LastSnapTimestamp\{fs="$TESTFS/sender/mypool"\} 0
 LastSnapTimestamp\{fs="$TESTFS/sender/mypool/fs1"\} 1[0-9]{9}
 LastSnapTimestamp\{fs="$TESTFS/sender/mypool/fs2"\} 1[0-9]{9}
 LastSnapTimestamp\{fs="$TESTFS/sender/mypool/fs2/sub"\} 1[0-9]{9}
+# HELP MonitorSuccess zfsbackup metric
+# TYPE MonitorSuccess untyped
+MonitorSuccess 1
 
 EOM
+}
+
+@test "RawResumeWithUnloadedSourceKey" {
+  local sourcefs="$SENDERFS/mypool/rawresume"
+  local destinationfs="$RECEIVERFS/mypool/rawresume"
+  local keyfile="$TEST_TMP_DIR/raw-resume.key"
+  printf 'raw-resume-test-passphrase' > "$keyfile"
+  zfs create -p -o canmount=off "$SENDERFS/mypool"
+  zfs receive -u -o canmount=off -o encryption=aes-256-gcm \
+    -o keyformat=passphrase -o "keylocation=file://$keyfile" \
+    "$sourcefs" < "$TESTSPATH/samplefs.zfs"
+  zfs snapshot "$sourcefs@snap_remote1"
+  zfs create -p -o canmount=off "$RECEIVERFS/mypool"
+  zfs unload-key "$sourcefs"
+
+  run bash -c 'set -o pipefail; zfs send -w "$1" | head -c 1048576 | zfs receive -su "$2"' \
+    _ "$sourcefs@snap_remote1" "$destinationfs"
+  assert_failure
+  run zfs get -H -o value receive_resume_token "$destinationfs"
+  assert_success
+  refute_output '-'
+
+  cat > "$TEST_TMP_DIR/raw-resume.json" <<EOF
+{
+  "include": ["$sourcefs"],
+  "sender": {
+    "snapshot_re": "snap_remote.*",
+    "destinations": [{
+      "receiver": "ssh -F $SSH_TEST_PATH/ssh_config -- test_target",
+      "raw_send": true,
+      "placeholders": ["rawresume"]
+    }]
+  }
+}
+EOF
+  run "$TEST_TMP_DIR/zfsbackup" sender --config="$TEST_TMP_DIR/raw-resume.json"
+  assert_success
+  run zfs get -H -o value receive_resume_token "$destinationfs"
+  assert_success
+  assert_output '-'
+  run zfs get -H -o value keystatus "$destinationfs"
+  assert_success
+  assert_output 'unavailable'
+  run zfs list -H -o name "$destinationfs@snap_remote1"
+  assert_success
+  run zfs list -H -t bookmark -o name "$sourcefs"
+  assert_success
+  assert_output "$sourcefs#snap_remote1-rawresume"
 }
