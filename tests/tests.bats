@@ -1004,7 +1004,7 @@ EOM
   assert_failure
   run zfs get -H -o value receive_resume_token "$destinationfs"
   assert_success
-  refute_output '-'
+  refute_output --regexp '^-$'
 
   cat > "$TEST_TMP_DIR/raw-resume.json" <<EOF
 {
@@ -1023,7 +1023,7 @@ EOF
   assert_success
   run zfs get -H -o value receive_resume_token "$destinationfs"
   assert_success
-  assert_output '-'
+  assert_output --regexp '^-$'
   run zfs get -H -o value keystatus "$destinationfs"
   assert_success
   assert_output 'unavailable'
