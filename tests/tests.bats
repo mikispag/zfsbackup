@@ -829,11 +829,9 @@ EOF
   assert_success
   run zfs list -H -p -t snapshot $TESTFS/sender/mypool/fs_many_snaps -o name -H
   assert_output -e <<EOM
-$TESTFS/sender/mypool/fs_many_snaps@snap-2-2022_09_24_02_00_00
-$TESTFS/sender/mypool/fs_many_snaps@snap-3-2022_09_25_02_00_00
-$TESTFS/sender/mypool/fs_many_snaps@snap-9-2022_10_01_02_00_00
-$TESTFS/sender/mypool/fs_many_snaps@snap-11-2022_10_03_02_00_00
-$TESTFS/sender/mypool/fs_many_snaps@snap-13-2022_10_05_02_00_00
+$TESTFS/sender/mypool/fs_many_snaps@snap-4-2022_09_26_02_00_00
+$TESTFS/sender/mypool/fs_many_snaps@snap-10-2022_10_02_02_00_00
+$TESTFS/sender/mypool/fs_many_snaps@snap-12-2022_10_04_02_00_00
 $TESTFS/sender/mypool/fs_many_snaps@snap-14-2022_10_06_02_00_00
 $TESTFS/sender/mypool/fs_many_snaps@snap-15-2022_10_07_02_00_00
 $TESTFS/sender/mypool/fs_many_snaps@snap-16-2022_10_07_14_00_00
@@ -880,10 +878,9 @@ EOF
   assert_success
   run zfs list -H -p -t snapshot $TESTFS/sender/mypool/fs_many_snaps -o name -H
   assert_output -e <<EOM
-$TESTFS/sender/mypool/fs_many_snaps@snap-3-2022_09_25_02_00_00
-$TESTFS/sender/mypool/fs_many_snaps@snap-7-2022_09_29_02_00_00
-$TESTFS/sender/mypool/fs_many_snaps@snap-11-2022_10_03_02_00_00
-$TESTFS/sender/mypool/fs_many_snaps@snap-15-2022_10_07_02_00_00
+$TESTFS/sender/mypool/fs_many_snaps@snap-8-2022_09_30_02_00_00
+$TESTFS/sender/mypool/fs_many_snaps@snap-12-2022_10_04_02_00_00
+$TESTFS/sender/mypool/fs_many_snaps@snap-18-2022_10_08_14_00_00
 EOM
 }
 
@@ -973,12 +970,12 @@ HasBrokenPool 0
 # HELP LastSnapAge zfsbackup metric
 # TYPE LastSnapAge untyped
 LastSnapAge\{fs="$TESTFS/sender/mypool/fs1"\} 34560.
+LastSnapAge\{fs="$TESTFS/sender/mypool/fs2"\} 17280.
+LastSnapAge\{fs="$TESTFS/sender/mypool/fs2/sub"\} 17280.
 # HELP LastSnapTimestamp zfsbackup metric
 # TYPE LastSnapTimestamp untyped
 LastSnapTimestamp\{fs="$TESTFS/sender/mypool/fs1"\} 1[0-9]{9}
-LastSnapAge\{fs="$TESTFS/sender/mypool/fs2"\} 17280.
 LastSnapTimestamp\{fs="$TESTFS/sender/mypool/fs2"\} 1[0-9]{9}
-LastSnapAge\{fs="$TESTFS/sender/mypool/fs2/sub"\} 17280.
 LastSnapTimestamp\{fs="$TESTFS/sender/mypool/fs2/sub"\} 1[0-9]{9}
 
 EOM

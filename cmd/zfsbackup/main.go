@@ -133,7 +133,7 @@ func printHelp() {
 
 	fmt.Printf("%s\n", yellow("RUN"))
 	flagLine("--config=PATH", "Unified config file (required)")
-	flagLine("--dry-run", "Dry-run mode for snapshot and deleter")
+	flagLine("--dry-run", "Preview snapshots/deletions and skip sender")
 	flagLine("--parallelism=N", "Filesystems to process in parallel  "+dim("[default: 1]"))
 	flagLine("--debug", "Debug logging")
 	fmt.Println()
@@ -179,21 +179,19 @@ func printHelp() {
 }
 
 func main() {
-	// Check for --help / -h / --version / version before any flag parsing so we
-	// control the output.
+	// Global shortcuts only apply in the command position. Subcommand flag
+	// values (for example, a config file named "version") are passed through.
 	if len(os.Args) < 2 {
 		printHelp()
 		os.Exit(0)
 	}
-	for _, arg := range os.Args[1:] {
-		switch arg {
-		case "--help", "-h", "help":
-			printHelp()
-			os.Exit(0)
-		case "--version", "-V", "version":
-			printVersion()
-			os.Exit(0)
-		}
+	switch os.Args[1] {
+	case "--help", "-h", "help":
+		printHelp()
+		return
+	case "--version", "-V", "version":
+		printVersion()
+		return
 	}
 
 	switch os.Args[1] {

@@ -78,7 +78,10 @@ func (dfp *deleteFsProcessor) getValidatedSnaps() error {
 		})
 	}
 	slices.SortFunc(dfp.snaps, func(a, b snapshot) int {
-		return a.Timestamp.Compare(b.Timestamp)
+		if cmp := a.Timestamp.Compare(b.Timestamp); cmp != 0 {
+			return cmp
+		}
+		return a.CreateTxg.Cmp(&b.CreateTxg)
 	})
 	for i := 1; i < len(dfp.snaps); i++ {
 		if dfp.snaps[i-1].CreateTxg.Cmp(&dfp.snaps[i].CreateTxg) == 1 {
@@ -89,7 +92,7 @@ func (dfp *deleteFsProcessor) getValidatedSnaps() error {
 }
 
 func (dfp *deleteFsProcessor) preserveTopN() {
-	topN := min(int(dfp.cfg.PreserveTopN), len(dfp.snaps))
+	topN := int(min(dfp.cfg.PreserveTopN, int64(len(dfp.snaps))))
 	for i := len(dfp.snaps) - topN; i < len(dfp.snaps); i++ {
 		dfp.snaps[i].preserve = true
 	}
@@ -102,6 +105,9 @@ func (dfp *deleteFsProcessor) preserveNewerThan() error {
 	newerThan, err := zfs.ParseDuration(dfp.cfg.PreserveNewerThan)
 	if err != nil {
 		return err
+	}
+	if newerThan < 0 {
+		return fmt.Errorf("preserve_newer_than must not be negative")
 	}
 	for i := range dfp.snaps {
 		if dfp.now.Sub(dfp.snaps[i].Timestamp) < newerThan {
@@ -116,6 +122,9 @@ func (dfp *deleteFsProcessor) preserveNewerThan() error {
 // the names of snapshots that should be deleted. dfp.snaps must already be
 // populated. This is separated from ProcessFs so it can be tested without ZFS.
 func (dfp *deleteFsProcessor) markForPreservation() ([]string, error) {
+	if dfp.cfg.PreserveTopN < 0 {
+		return nil, fmt.Errorf("preserve_top_n must not be negative")
+	}
 	if len(dfp.snaps) == 0 {
 		return nil, nil
 	}
@@ -131,34 +140,30 @@ func (dfp *deleteFsProcessor) markForPreservation() ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
+		if intervalSize <= 0 || r.Count <= 0 {
+			return nil, fmt.Errorf("retention interval and count must be positive: %v", r)
+		}
 		nowUnix := dfp.now.Unix()
-		intervals := make([]bool, r.Count+1)
-		for i := range dfp.snaps {
-			intervalIdx := (nowUnix - dfp.snaps[i].Timestamp.Unix()) / int64(intervalSize.Seconds())
+		lastInterval := int64(-1)
+		holeMsg := ""
+		// Walk newest first so each bucket retains its most recent snapshot.
+		// Tracking bucket transitions also avoids allocating Count entries.
+		for i := len(dfp.snaps) - 1; i >= 0; i-- {
+			intervalIdx := (nowUnix - dfp.snaps[i].Timestamp.Unix()) / int64(intervalSize/time.Second)
 			slog.Debug("snap interval", "snap", dfp.snaps[i].Name, "interval", intervalIdx)
-			if intervalIdx < 0 || intervalIdx >= int64(len(intervals)) {
+			if intervalIdx < 0 || intervalIdx >= r.Count || intervalIdx == lastInterval {
 				continue
 			}
-			if !intervals[intervalIdx] {
-				dfp.snaps[i].preserve = true
-				intervals[intervalIdx] = true
-			}
-		}
-
-		holeMsg := fmt.Sprintf("hole in retention rule %v for %s; intervals: %v", r, dfp.fs, intervals)
-		seenGap, warnHole := false, false
-		for i := 1; i < len(intervals)-1; i++ {
-			if !intervals[i] {
-				seenGap = true
-			} else if seenGap {
-				if r.AllowHoles {
-					warnHole = true
-				} else {
+			if intervalIdx > lastInterval+1 && holeMsg == "" {
+				holeMsg = fmt.Sprintf("hole in retention rule %v for %s; intervals: %d to %d", r, dfp.fs, lastInterval+1, intervalIdx-1)
+				if !r.AllowHoles {
 					return nil, fmt.Errorf("%s", holeMsg)
 				}
 			}
+			dfp.snaps[i].preserve = true
+			lastInterval = intervalIdx
 		}
-		if warnHole {
+		if holeMsg != "" {
 			slog.Warn(holeMsg)
 		}
 	}
@@ -260,6 +265,9 @@ func Main() {
 	debug := deleterFlags.Bool("debug", false, "enable debug logging")
 	deleterFlags.Parse(os.Args[2:])
 	zfs.SetupLogger(*debug)
+	if deleterFlags.NArg() != 0 {
+		zfs.Fatal("unexpected arguments", "args", deleterFlags.Args())
+	}
 
 	cfg := &config.Config{}
 	zfs.LoadConfig(*configFile, cfg)

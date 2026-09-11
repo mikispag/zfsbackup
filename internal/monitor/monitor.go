@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"maps"
 	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -118,16 +119,46 @@ func (m *mon) lastSnapMetrics() error {
 
 func (m *mon) asPrometheus() string {
 	var b strings.Builder
-	seen := make(map[string]bool)
+	var names []string
+	families := make(map[string][]metric)
 	for _, met := range m.metrics {
-		if !seen[met.Name] {
-			fmt.Fprintf(&b, "# HELP %s zfsbackup metric\n", met.Name)
-			fmt.Fprintf(&b, "# TYPE %s untyped\n", met.Name)
-			seen[met.Name] = true
+		if _, seen := families[met.Name]; !seen {
+			names = append(names, met.Name)
 		}
-		fmt.Fprintln(&b, met.asPrometheus())
+		families[met.Name] = append(families[met.Name], met)
+	}
+	for _, name := range names {
+		fmt.Fprintf(&b, "# HELP %s zfsbackup metric\n", name)
+		fmt.Fprintf(&b, "# TYPE %s untyped\n", name)
+		for _, met := range families[name] {
+			fmt.Fprintln(&b, met.asPrometheus())
+		}
 	}
 	return b.String()
+}
+
+func writePrometheusFile(filePath, output string) error {
+	// A unique file in the destination directory keeps publication atomic
+	// even when different monitor configs share the same output path.
+	tmp, err := os.CreateTemp(filepath.Dir(filePath), "."+filepath.Base(filePath)+"-*")
+	if err != nil {
+		return fmt.Errorf("cannot create Prometheus output file: %w", err)
+	}
+	defer os.Remove(tmp.Name())
+	defer tmp.Close()
+	if err := tmp.Chmod(0o644); err != nil {
+		return fmt.Errorf("cannot set Prometheus output permissions: %w", err)
+	}
+	if _, err := tmp.WriteString(output); err != nil {
+		return fmt.Errorf("cannot write Prometheus output file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("cannot close Prometheus output file: %w", err)
+	}
+	if err := os.Rename(tmp.Name(), filePath); err != nil {
+		return fmt.Errorf("cannot publish Prometheus output file %s: %w", filePath, err)
+	}
+	return nil
 }
 
 func (m *mon) run() error {
@@ -140,13 +171,9 @@ func (m *mon) run() error {
 		errs = append(errs, err.Error())
 	}
 	output := m.asPrometheus()
-	if path := m.cfg.PrometheusOutput; path != "" {
-		tmp := path + ".tmp"
-		if err := os.WriteFile(tmp, []byte(output), 0o644); err != nil {
-			return fmt.Errorf("cannot write Prometheus output file %s: %w", tmp, err)
-		}
-		if err := os.Rename(tmp, path); err != nil {
-			return fmt.Errorf("cannot rename Prometheus output file %s -> %s: %w", tmp, path, err)
+	if filePath := m.cfg.PrometheusOutput; filePath != "" {
+		if err := writePrometheusFile(filePath, output); err != nil {
+			return err
 		}
 	}
 	fmt.Print(output)
@@ -181,6 +208,9 @@ func Main() {
 	debug := monitorFlags.Bool("debug", false, "enable debug logging")
 	monitorFlags.Parse(os.Args[2:])
 	zfs.SetupLogger(*debug)
+	if monitorFlags.NArg() != 0 {
+		zfs.Fatal("unexpected arguments", "args", monitorFlags.Args())
+	}
 
 	cfg := &config.Config{}
 	zfs.LoadConfig(*configFile, cfg)

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -48,17 +49,23 @@ func ParseDuration(duration string) (time.Duration, error) {
 	if !found {
 		return 0, fmt.Errorf("%q is not a valid duration: unrecognised suffix %q", duration, suf)
 	}
+	if n < 0 || n > math.MaxInt64/int64(mult) {
+		return 0, fmt.Errorf("%q is not a valid duration: out of range", duration)
+	}
 	return time.Duration(n) * mult, nil
 }
 
 // findExecutablePath searches PATH plus /sbin and /usr/sbin for name without
 // modifying any global state. Returns the path and true if found.
 func findExecutablePath(name string) (string, bool) {
-	dirs := filepath.SplitList(os.Getenv("PATH"))
-	dirs = append(dirs, "/sbin", "/usr/sbin")
-	for _, dir := range dirs {
-		p := filepath.Join(dir, name)
-		if fi, err := os.Stat(p); err == nil && !fi.IsDir() && fi.Mode()&0o111 != 0 {
+	if p, err := exec.LookPath(name); err == nil {
+		return p, true
+	}
+	if strings.ContainsRune(name, filepath.Separator) {
+		return "", false
+	}
+	for _, dir := range []string{"/sbin", "/usr/sbin"} {
+		if p, err := exec.LookPath(filepath.Join(dir, name)); err == nil {
 			return p, true
 		}
 	}
@@ -80,7 +87,9 @@ func getExecutablePath(name string) string {
 	}
 	p, ok := findExecutablePath(name)
 	if !ok {
-		Fatal("executable not found in PATH", "binary", name)
+		// Let exec.Cmd return the lookup/start error to the caller, so one
+		// unavailable receiver does not terminate other backup jobs.
+		return name
 	}
 	execPathCache.Store(name, p)
 	return p
@@ -152,14 +161,17 @@ func LoadConfig(filePath string, v any) {
 	d := json.NewDecoder(f)
 	d.DisallowUnknownFields()
 	FatalIfError(d.Decode(v), "cannot parse config: %w")
+	if err := d.Decode(new(any)); err != io.EOF {
+		Fatal("config must contain exactly one JSON value", "err", err)
+	}
 }
 
 // MaybeMbuffer wraps input with mbuffer when mbufferArgs is non-empty.
 // Each element of mbufferArgs may contain a whitespace-separated flag/value
 // pair (e.g. "-s 1M") and is split before being passed to exec.
-func MaybeMbuffer(ctx context.Context, mbufferArgs []string, input io.ReadCloser) (io.ReadCloser, *exec.Cmd) {
+func MaybeMbuffer(ctx context.Context, mbufferArgs []string, input io.ReadCloser) (io.ReadCloser, *exec.Cmd, error) {
 	if len(mbufferArgs) == 0 {
-		return input, nil
+		return input, nil, nil
 	}
 	var flatArgs []string
 	for _, a := range mbufferArgs {
@@ -169,57 +181,67 @@ func MaybeMbuffer(ctx context.Context, mbufferArgs []string, input io.ReadCloser
 	cmd.Stdin = input
 	pipe, err := cmd.StdoutPipe()
 	if err != nil {
-		Fatal("cannot create mbuffer stdout pipe", "err", err)
+		return nil, nil, fmt.Errorf("cannot create mbuffer stdout pipe: %w", err)
 	}
 	if err := cmd.Start(); err != nil {
-		Fatal("cannot start mbuffer", "err", err, "cmd", cmd.Args)
+		pipe.Close()
+		return nil, nil, fmt.Errorf("cannot start mbuffer: %w", err)
 	}
-	return pipe, cmd
+	return pipe, cmd, nil
 }
 
 // MaybeCompress wraps input with a compressor if compressionType is not "none".
 // compressionLevel may be nil to use the compressor's default level.
-func MaybeCompress(ctx context.Context, compressionType string, compressionLevel *int, input io.ReadCloser) (io.ReadCloser, *exec.Cmd) {
+func MaybeCompress(ctx context.Context, compressionType string, compressionLevel *int, input io.ReadCloser) (io.ReadCloser, *exec.Cmd, error) {
+	prog, err := CompressionProg(compressionType)
+	if err != nil {
+		return nil, nil, err
+	}
 	var args []string
 	if compressionLevel != nil {
 		args = append(args, fmt.Sprintf("-%d", *compressionLevel))
 	}
-	return internalCompress(ctx, CompressionProg(compressionType), args, input)
+	return internalCompress(ctx, prog, args, input)
 }
 
 // MaybeDecompress wraps input with a decompressor for the given format name.
-func MaybeDecompress(ctx context.Context, format string, input io.ReadCloser) (io.ReadCloser, *exec.Cmd) {
-	return internalCompress(ctx, CompressionProg(format), []string{"-d"}, input)
+func MaybeDecompress(ctx context.Context, format string, input io.ReadCloser) (io.ReadCloser, *exec.Cmd, error) {
+	prog, err := CompressionProg(format)
+	if err != nil {
+		return nil, nil, err
+	}
+	return internalCompress(ctx, prog, []string{"-d"}, input)
 }
 
-func internalCompress(ctx context.Context, prog string, args []string, input io.ReadCloser) (io.ReadCloser, *exec.Cmd) {
+func internalCompress(ctx context.Context, prog string, args []string, input io.ReadCloser) (io.ReadCloser, *exec.Cmd, error) {
 	if prog == "" {
-		return input, nil
+		return input, nil, nil
 	}
 	cmd := DefaultExecCommand(ctx, prog, args...)
 	cmd.Stdin = input
 	pipe, err := cmd.StdoutPipe()
 	if err != nil {
-		Fatal("cannot create compressor stdout pipe", "err", err)
+		return nil, nil, fmt.Errorf("cannot create compressor stdout pipe: %w", err)
 	}
 	if err := cmd.Start(); err != nil {
-		Fatal("cannot start compressor", "err", err, "cmd", cmd.Args)
+		pipe.Close()
+		return nil, nil, fmt.Errorf("cannot start compressor: %w", err)
 	}
-	return pipe, cmd
+	return pipe, cmd, nil
 }
 
 // CompressionProg maps a compression type name to the corresponding binary.
 // Returns an empty string for "none".
-func CompressionProg(t string) string {
+func CompressionProg(t string) (string, error) {
 	progs := map[string]string{
 		"none": "",
 		"zstd": "zstd",
 	}
 	prog, ok := progs[strings.ToLower(t)]
 	if !ok {
-		Fatal("unknown compression type; only NONE and ZSTD are supported", "type", t)
+		return "", fmt.Errorf("unknown compression type %q; only NONE and ZSTD are supported", t)
 	}
-	return prog
+	return prog, nil
 }
 
 // ExpandFsToProcess lists all ZFS filesystems that match include but not

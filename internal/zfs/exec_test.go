@@ -1,7 +1,10 @@
 package zfs
 
 import (
+	"context"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -46,6 +49,8 @@ func TestParseDuration_invalid(t *testing.T) {
 		"h",
 		"1.5d",                 // non-integer prefix: ParseInt fails
 		"9999999999999999999d", // int64 overflow: ParseInt fails
+		"9223372037s",          // duration multiplication overflows int64
+		"-1h",                  // configuration durations must not be negative
 	}
 	for _, input := range cases {
 		t.Run(input, func(t *testing.T) {
@@ -58,25 +63,25 @@ func TestParseDuration_invalid(t *testing.T) {
 }
 
 func TestCompressionProg_none(t *testing.T) {
-	if got := CompressionProg("none"); got != "" {
+	if got, err := CompressionProg("none"); err != nil || got != "" {
 		t.Errorf(`CompressionProg("none") = %q; want ""`, got)
 	}
 }
 
 func TestCompressionProg_noneUpperCase(t *testing.T) {
-	if got := CompressionProg("NONE"); got != "" {
+	if got, err := CompressionProg("NONE"); err != nil || got != "" {
 		t.Errorf(`CompressionProg("NONE") = %q; want ""`, got)
 	}
 }
 
 func TestCompressionProg_zstd(t *testing.T) {
-	if got := CompressionProg("zstd"); got != "zstd" {
+	if got, err := CompressionProg("zstd"); err != nil || got != "zstd" {
 		t.Errorf(`CompressionProg("zstd") = %q; want "zstd"`, got)
 	}
 }
 
 func TestCompressionProg_zstdUpperCase(t *testing.T) {
-	if got := CompressionProg("ZSTD"); got != "zstd" {
+	if got, err := CompressionProg("ZSTD"); err != nil || got != "zstd" {
 		t.Errorf(`CompressionProg("ZSTD") = %q; want "zstd"`, got)
 	}
 }
@@ -85,7 +90,10 @@ func TestCompressionProg_zstdUpperCase(t *testing.T) {
 // original reader unchanged and no command.
 func TestMaybeMbuffer_noArgs_returnsInputUnchanged(t *testing.T) {
 	original := io.NopCloser(strings.NewReader("hello"))
-	got, cmd := MaybeMbuffer(nil, nil, original)
+	got, cmd, err := MaybeMbuffer(nil, nil, original)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if got != original {
 		t.Error("MaybeMbuffer(nil, nil, input) should return input unchanged")
 	}
@@ -104,11 +112,38 @@ func TestParseTabular_commandFails_returnsError(t *testing.T) {
 
 func TestMaybeMbuffer_emptySlice_returnsInputUnchanged(t *testing.T) {
 	original := io.NopCloser(strings.NewReader("data"))
-	got, cmd := MaybeMbuffer(nil, []string{}, original)
+	got, cmd, err := MaybeMbuffer(nil, []string{}, original)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if got != original {
 		t.Error("MaybeMbuffer with empty slice should return input unchanged")
 	}
 	if cmd != nil {
 		t.Error("MaybeMbuffer with empty slice should return nil cmd")
+	}
+}
+
+func TestCompressionHelpersReturnConfigurationErrors(t *testing.T) {
+	input := io.NopCloser(strings.NewReader("stream"))
+	if _, _, err := MaybeCompress(context.Background(), "unsupported", nil, input); err == nil {
+		t.Fatal("unsupported compressor did not return an error")
+	}
+	if _, _, err := MaybeDecompress(context.Background(), "unsupported", input); err == nil {
+		t.Fatal("unsupported decompressor did not return an error")
+	}
+}
+
+func TestCompressorStartupFailuresReturnErrors(t *testing.T) {
+	dir := t.TempDir()
+	broken := filepath.Join(dir, "broken")
+	if err := os.WriteFile(broken, []byte("#!/missing-interpreter\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, prog := range []string{filepath.Join(dir, "missing"), broken} {
+		input := io.NopCloser(strings.NewReader("stream"))
+		if _, _, err := internalCompress(context.Background(), prog, nil, input); err == nil {
+			t.Fatalf("compressor %s unexpectedly started", prog)
+		}
 	}
 }

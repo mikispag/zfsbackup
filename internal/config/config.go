@@ -138,7 +138,9 @@ type DestinationConfig struct {
 	// Set explicitly for a human-readable name. When sending to multiple
 	// destinations each entry in the job's Destinations list must use a distinct
 	// suffix so their bookmarks do not collide. Suffixes must not contain
-	// hyphens.
+	// hyphens. A suffix reserves all bookmarks ending in "-<suffix>" on a
+	// filesystem: successful sends remove older bookmarks using that suffix.
+	// Keep suffixes distinct across separate jobs and manually managed bookmarks.
 	Placeholders []string `json:"placeholders,omitempty"`
 
 	// SyncPlaceholders lists placeholder bookmark suffixes to synchronise to
@@ -255,7 +257,7 @@ type MonitorConfig struct {
 	Exclude []string `json:"exclude,omitempty"`
 
 	// PrometheusOutput is the path where Prometheus text-format metrics are
-	// written atomically (via a .tmp rename), e.g.
+	// written atomically (via a unique temporary file and rename), e.g.
 	// "/var/lib/node_exporter/textfile_collector/zfsbackup.prom". If empty,
 	// metrics are printed to stdout only.
 	PrometheusOutput string `json:"prometheus_output,omitempty"`

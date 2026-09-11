@@ -1,6 +1,7 @@
 package sender
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -137,7 +138,7 @@ func (fsp *fsProcessor) sendPlaceholders() error {
 		return nil
 	}
 	sp := &config.SetPlaceholders{FS: fsp.fs}
-	bookmarks, err := zfs.ZfsList([]string{"name", "guid"}, "bookmark", fsp.fs)
+	bookmarks, err := zfs.ZfsList([]string{"name", "guid"}, "bookmark", fsp.fs, "-s", "createtxg")
 	if err != nil {
 		return err
 	}
@@ -166,16 +167,7 @@ func (fsp *fsProcessor) sendPlaceholders() error {
 	}
 	cmd := buildReceiverCmd(context.Background(), fsp.dst.Receiver,
 		"--op=set_placeholders", "--dataset="+fsp.fs)
-	wrcloser, err := cmd.StdinPipe()
-	if err != nil {
-		return fmt.Errorf("cannot open stdin pipe: %w", err)
-	}
-	go func() {
-		if _, err := wrcloser.Write(spBytes); err != nil {
-			slog.Error("failed to write SetPlaceholders payload", "err", err, "fs", fsp.fs)
-		}
-		wrcloser.Close()
-	}()
+	cmd.Stdin = bytes.NewReader(spBytes)
 	out, err := cmd.Output()
 	if err != nil {
 		slog.Error("set_placeholders failed", "output", string(out), "fs", fsp.fs)
@@ -208,7 +200,7 @@ func (fsp *fsProcessor) GetIncrementalSuggestions() error {
 	if is.ResumeToken != "" && resumable {
 		fsp.resumeToken = is.ResumeToken
 	} else if is.ResumeToken != "" {
-		slog.Warn("receiver has a resume token but resumable is disabled", "fs", fsp.fs)
+		return fmt.Errorf("receiver has a resume token for %s but resumable is disabled", fsp.fs)
 	}
 	if is.LastSnapshot != "" && is.GUID != "" {
 		for _, s := range fsp.sources {
@@ -289,11 +281,32 @@ func (fsp *fsProcessor) send(zfsArgs []string, fast bool) error {
 	if err != nil {
 		return err
 	}
+	defer preader.Close()
 
-	bufferedReader, bufferCmd := zfs.MaybeMbuffer(ctx, fsp.dst.MbufferArgs, preader)
+	// Keep producer pipes open until every consumer has inherited its input.
+	// On startup failure, kill and reap all helpers that have already started.
+	started := []*exec.Cmd{}
+	defer func() {
+		cancel()
+		for _, process := range started {
+			process.Wait()
+		}
+	}()
+	bufferedReader, bufferCmd, err := zfs.MaybeMbuffer(ctx, fsp.dst.MbufferArgs, preader)
+	if err != nil {
+		return err
+	}
+	if bufferCmd != nil {
+		started = append(started, bufferCmd)
+	}
 	ct := compressionType(fsp.dst)
-	reader, comprCmd := zfs.MaybeCompress(ctx, ct, fsp.dst.CompressionLevel, bufferedReader)
-
+	reader, comprCmd, err := zfs.MaybeCompress(ctx, ct, fsp.dst.CompressionLevel, bufferedReader)
+	if err != nil {
+		return err
+	}
+	if comprCmd != nil {
+		started = append(started, comprCmd)
+	}
 	receiverArgs := []string{"--op=receive", "--dataset=" + fsp.fs,
 		"--compression=" + ct}
 	if fast {
@@ -306,8 +319,11 @@ func (fsp *fsProcessor) send(zfsArgs []string, fast bool) error {
 	if err := zfsCmd.Start(); err != nil {
 		return fmt.Errorf("cannot start zfs send: %w", err)
 	}
-	// Register Wait() for all started processes before attempting cmd.Start()
-	// so that any early-return error path can drain them via cancel+eg.Wait().
+	started = append(started, zfsCmd)
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("cannot start remote receiver: %w", err)
+	}
+	started = append(started, cmd)
 	eg.Go(func() error {
 		if err := zfsCmd.Wait(); err != nil {
 			return fmt.Errorf("zfs send %v failed: %w", zfsArgs, err)
@@ -331,25 +347,22 @@ func (fsp *fsProcessor) send(zfsArgs []string, fast bool) error {
 		})
 	}
 
-	if err := cmd.Start(); err != nil {
-		cancel()
-		eg.Wait() //nolint:errcheck — errors expected from process kill
-		return fmt.Errorf("cannot start remote receiver: %w", err)
-	}
 	eg.Go(func() error {
 		if err := cmd.Wait(); err != nil {
 			return fmt.Errorf("remote receive failed: %w", err)
 		}
 		return nil
 	})
-	return eg.Wait()
+	err = eg.Wait()
+	started = nil // All processes were reaped by their group functions.
+	return err
 }
 
 func (fsp *fsProcessor) ProcessFs() error {
 	if err := fsp.FillSources(); err != nil {
 		return err
 	}
-	if len(fsp.PotentialSnapsToSend()) == 0 {
+	if len(fsp.PotentialSnapsToSend()) == 0 && len(fsp.dst.SyncPlaceholders) == 0 {
 		return nil
 	}
 	retriesLeft := 20
@@ -383,8 +396,7 @@ func (fsp *fsProcessor) GetNextAndSend() (retry bool, err error) {
 			slog.Info("receiver has dataset with no common base; sending full stream because destination is in force_overwrite_datasets", "fs", fsp.fs)
 			fsp.sendFull = true
 		} else {
-			slog.Warn("receiver has dataset with no common base; skipping — remove the empty destination manually to enable full backup", "fs", fsp.fs)
-			return false, nil
+			return false, fmt.Errorf("receiver has dataset %s with no common incremental base; recovery is required before backup can continue", fsp.fs)
 		}
 	}
 
@@ -442,7 +454,7 @@ func NewFSProcessor(fs string, job *config.SenderConfig, dst *config.Destination
 		fs:     fs,
 		job:    job,
 		dst:    dst,
-		snapRe: regexp.MustCompile(fmt.Sprintf("^%s$", txtre)),
+		snapRe: regexp.MustCompile(fmt.Sprintf("^(?:%s)$", txtre)),
 	}
 }
 
@@ -477,9 +489,12 @@ func buildReceiverCmd(ctx context.Context, cmdReceiver string, args ...string) *
 // initSenderDefaults applies per-job and per-destination defaults and validates
 // the config in-place. Called by both Run and Main so the logic lives in one
 // place.
-func initSenderDefaults(sc *config.SenderConfig) {
+func initSenderDefaults(sc *config.SenderConfig) error {
 	if len(sc.Destinations) == 0 {
-		zfs.Fatal("sender config must have at least one destination")
+		return fmt.Errorf("sender config must have at least one destination")
+	}
+	if _, err := regexp.Compile("^(?:" + sc.SnapshotRegex + ")$"); err != nil {
+		return fmt.Errorf("invalid sender snapshot_re: %w", err)
 	}
 	if sc.Resumable == nil {
 		t := true
@@ -489,23 +504,39 @@ func initSenderDefaults(sc *config.SenderConfig) {
 		t := true
 		sc.IncludeProperties = &t
 	}
+	owners := make(map[string]int)
 	for i := range sc.Destinations {
 		dst := &sc.Destinations[i]
+		if len(strings.Fields(dst.Receiver)) == 0 {
+			return fmt.Errorf("destination %d: receiver is empty", i+1)
+		}
+		if ct := strings.ToLower(compressionType(dst)); ct != "none" && ct != "zstd" {
+			return fmt.Errorf("destination %d: unsupported compression %q", i+1, dst.Compression)
+		}
 		if len(dst.Placeholders) == 0 && dst.Receiver != "" {
 			name := autoPlaceholderName(dst.Receiver)
 			dst.Placeholders = []string{name}
 			slog.Info("placeholder bookmarks auto-enabled", "destination", dst.Receiver, "name", name)
 		}
 		for _, p := range dst.Placeholders {
-			if strings.Contains(p, "-") {
-				zfs.Fatal("placeholder suffix must not contain hyphens — zfsGcPlaceholder splits on \"-\" and uses the last component as the key",
-					"suffix", p)
+			if !zfs.IsValidPlaceholder(p) {
+				return fmt.Errorf("destination %d: invalid placeholder suffix %q", i+1, p)
+			}
+			if owner, ok := owners[p]; ok && owner != i {
+				return fmt.Errorf("placeholder suffix %q is shared by destinations %d and %d", p, owner+1, i+1)
+			}
+			owners[p] = i
+		}
+		for _, p := range dst.SyncPlaceholders {
+			if !zfs.IsValidPlaceholder(p) {
+				return fmt.Errorf("destination %d: invalid sync placeholder suffix %q", i+1, p)
 			}
 		}
 		if len(dst.MbufferArgs) == 0 && zfs.MbufferPresent() {
 			dst.MbufferArgs = []string{"-p 90", "-m 3%"}
 		}
 	}
+	return nil
 }
 
 // processFilesystem sends to every configured destination for a single
@@ -535,7 +566,9 @@ func Run(cfg *config.Config, parallelism int, limitFs string) error {
 		return fmt.Errorf("sender: no sender section in config")
 	}
 	sc := cfg.Sender
-	initSenderDefaults(sc)
+	if err := initSenderDefaults(sc); err != nil {
+		return err
+	}
 
 	if parallelism < 1 {
 		parallelism = 1
@@ -578,6 +611,9 @@ func Main() {
 	debug := senderFlags.Bool("debug", false, "enable debug logging")
 	senderFlags.Parse(os.Args[2:])
 	zfs.SetupLogger(*debug)
+	if senderFlags.NArg() != 0 {
+		zfs.Fatal("unexpected arguments", "args", senderFlags.Args())
+	}
 
 	cfg := &config.Config{}
 	zfs.LoadConfig(*configFile, cfg)

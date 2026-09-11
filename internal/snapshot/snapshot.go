@@ -10,6 +10,7 @@ import (
 	"os"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/mikispag/zfsbackup/internal/config"
@@ -77,12 +78,15 @@ func Run(cfg *config.Config, dryRun bool) error {
 		return fmt.Errorf("snapshot: no snapshot section in config")
 	}
 	sc := cfg.Snapshot
+	snapName := time.Now().Format(sc.NamePattern)
+	if err := zfs.IsValidZFSDataset(snapName); err != nil || strings.ContainsRune(snapName, '/') {
+		return fmt.Errorf("snapshot: invalid snapshot name %q", snapName)
+	}
 	include := cfg.ResolveInclude(sc.Include)
 	exclude := cfg.ResolveExclude(sc.Exclude)
 	fsToProcess := zfs.ExpandFsToProcess(include, exclude)
 	fsToSkip := MaybeSkipSnaps(sc, fsToProcess)
 
-	snapName := time.Now().Format(sc.NamePattern)
 	perPoolArgs := make(map[string][]string)
 	for _, fs := range fsToProcess {
 		if fsToSkip[fs] {
@@ -121,6 +125,9 @@ func Main() {
 	debug := snapshotFlags.Bool("debug", false, "enable debug logging")
 	snapshotFlags.Parse(os.Args[2:])
 	zfs.SetupLogger(*debug)
+	if snapshotFlags.NArg() != 0 {
+		zfs.Fatal("unexpected arguments", "args", snapshotFlags.Args())
+	}
 
 	cfg := &config.Config{}
 	zfs.LoadConfig(*configFile, cfg)

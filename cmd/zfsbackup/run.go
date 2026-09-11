@@ -22,13 +22,19 @@ func runMain() {
 	runFlags := flag.NewFlagSet("run", flag.ExitOnError)
 	configFile := runFlags.String("config", "", "path to unified config file")
 	parallelism := runFlags.Int("parallelism", 1, "number of filesystems to process in parallel")
-	dryRun := runFlags.Bool("dry-run", false, "pass dry-run flag to snapshot and deleter")
+	dryRun := runFlags.Bool("dry-run", false, "preview snapshots and deletions, and skip sending")
 	debug := runFlags.Bool("debug", false, "enable debug logging")
 	runFlags.Parse(os.Args[2:])
 	zfs.SetupLogger(*debug)
+	if runFlags.NArg() != 0 {
+		zfs.Fatal("unexpected arguments", "args", runFlags.Args())
+	}
 
 	if *configFile == "" {
 		zfs.Fatal("--config is required")
+	}
+	if *parallelism <= 0 {
+		zfs.Fatal("parallelism must be positive")
 	}
 
 	cfg := &config.Config{}
@@ -52,7 +58,9 @@ func runMain() {
 		}
 	}
 
-	if cfg.Sender != nil {
+	if cfg.Sender != nil && *dryRun {
+		slog.Info("skipping sender module in dry-run mode")
+	} else if cfg.Sender != nil {
 		slog.Info("running sender module")
 		if err := sender.Run(cfg, *parallelism, ""); err != nil {
 			slog.Error("sender failed", "err", err)

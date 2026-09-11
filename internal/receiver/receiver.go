@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path"
 	"strings"
 
@@ -24,6 +25,9 @@ func setPlaceholders(baseds, ds string) {
 
 	interestingGuids := make(map[string]bool, len(sp.Placeholders))
 	for _, p := range sp.Placeholders {
+		if !zfs.IsValidPlaceholder(p.Name) {
+			zfs.Fatal("invalid placeholder suffix", "suffix", p.Name)
+		}
 		interestingGuids[p.GUID] = true
 	}
 	if err := zfs.IsValidZFSDataset(sp.FS); err != nil {
@@ -82,6 +86,15 @@ func incrementalSuggestion(baseds, ds string, cfg *config.ReceiverConfig) {
 	ret := &config.IncrementalSuggestions{}
 
 	if err != nil || len(outp) != 1 {
+		// A failed property query can also indicate permissions or a pool
+		// failure. Confirm absence before requesting an expensive full send.
+		filesystems, listErr := zfs.ZfsList([]string{"name"}, "filesystem", baseds, "-r")
+		zfs.FatalIfError(listErr, "cannot inspect destination datasets: %w")
+		for _, row := range filesystems {
+			if row[0] == destinationDs {
+				zfs.Fatal("cannot inspect existing destination", "dataset", destinationDs, "err", err)
+			}
+		}
 		ret.SendFull = true
 	} else {
 		token := outp[0][1]
@@ -89,7 +102,8 @@ func incrementalSuggestion(baseds, ds string, cfg *config.ReceiverConfig) {
 			ret.ResumeToken = token
 		}
 		snapoutp, snapErr := zfs.ZfsList([]string{"name", "guid"}, "snapshot", destinationDs, "-S", "createtxg")
-		if snapErr == nil && len(snapoutp) >= 1 {
+		zfs.FatalIfError(snapErr, "cannot list destination snapshots: %w")
+		if len(snapoutp) >= 1 {
 			ret.LastSnapshot = zfs.SnapshotName(snapoutp[0][0])
 			ret.GUID = snapoutp[0][1]
 		}
@@ -149,8 +163,10 @@ func checkParent(fs string, disableMount bool) error {
 	return err
 }
 
-func receive(baseds, ds, compression string, cfg *config.ReceiverConfig, fast bool) {
-	eg, ctx := zfs.NewGroup(context.Background())
+func receive(baseds, ds, compression string, cfg *config.ReceiverConfig, fast bool) error {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	eg, ctx := zfs.NewGroup(ctx)
 
 	destinationDs := fmt.Sprintf("%s/%s", baseds, ds)
 	// -u suppresses the immediate post-receive mount; -o canmount=off makes the
@@ -158,9 +174,9 @@ func receive(baseds, ds, compression string, cfg *config.ReceiverConfig, fast bo
 	// future 'zfs mount -a' or boot. Together they fulfil the disable_mount
 	// contract: the received dataset is never mounted under any circumstance.
 	disableMount := cfg.DisableMount == nil || *cfg.DisableMount
-	recvArgs := []string{"receive", "-vu"}
+	recvArgs := []string{"receive", "-v"}
 	if disableMount {
-		recvArgs = append(recvArgs, "-o", "canmount=off")
+		recvArgs = append(recvArgs, "-u", "-o", "canmount=off")
 	}
 	for _, p := range cfg.EnforceLocalProperties {
 		if p == "" || strings.ContainsAny(p, " \t\n\r") {
@@ -195,15 +211,34 @@ func receive(baseds, ds, compression string, cfg *config.ReceiverConfig, fast bo
 	}
 	recvArgs = append(recvArgs, destinationDs)
 
-	bufferedData, bufferCmd := zfs.MaybeMbuffer(ctx, cfg.MbufferArgs, os.Stdin)
-	uncompressedData, decomprCmd := zfs.MaybeDecompress(ctx, compression, bufferedData)
-
+	started := []*exec.Cmd{}
+	defer func() {
+		cancel()
+		for _, process := range started {
+			process.Wait()
+		}
+	}()
+	bufferedData, bufferCmd, err := zfs.MaybeMbuffer(ctx, cfg.MbufferArgs, os.Stdin)
+	if err != nil {
+		return err
+	}
+	if bufferCmd != nil {
+		started = append(started, bufferCmd)
+	}
+	uncompressedData, decomprCmd, err := zfs.MaybeDecompress(ctx, compression, bufferedData)
+	if err != nil {
+		return err
+	}
+	if decomprCmd != nil {
+		started = append(started, decomprCmd)
+	}
 	cmd := zfs.DefaultExecCommand(ctx, "zfs", recvArgs...)
 	cmd.Stdin = uncompressedData
 	cmd.Stdout = os.Stdout
 	if err := cmd.Start(); err != nil {
-		zfs.Fatal("cannot start zfs receive", "err", err, "cmd", cmd.Args)
+		return fmt.Errorf("cannot start zfs receive: %w", err)
 	}
+	started = append(started, cmd)
 
 	eg.Go(func() error {
 		if err := cmd.Wait(); err != nil {
@@ -227,9 +262,9 @@ func receive(baseds, ds, compression string, cfg *config.ReceiverConfig, fast bo
 			return nil
 		})
 	}
-	if err := eg.Wait(); err != nil {
-		zfs.Fatal("receive pipeline failed", "err", err)
-	}
+	err = eg.Wait()
+	started = nil
+	return err
 }
 
 func Main() {
@@ -240,8 +275,7 @@ func Main() {
 	receiverFlags.Parse(os.Args[2:])
 	zfs.SetupLogger(*debug)
 
-	// Config is optional; receiver is invoked as an SSH ForceCommand and is
-	// never run concurrently against the same config, so no flock is needed.
+	// Config is optional and read-only; parallel SSH receivers may share it.
 	cfg := &config.ReceiverConfig{}
 	if *configFile != "" {
 		f, err := os.Open(*configFile)
@@ -250,6 +284,9 @@ func Main() {
 		d := json.NewDecoder(f)
 		d.DisallowUnknownFields()
 		zfs.FatalIfError(d.Decode(cfg), "cannot parse config: %w")
+		if err := d.Decode(new(any)); err != io.EOF {
+			zfs.Fatal("receiver config must contain exactly one JSON value", "err", err)
+		}
 	}
 
 	baseDS := cfg.BaseDataset
@@ -277,8 +314,14 @@ func Main() {
 	compression := clientFlags.String("compression", "none", "compression algorithm in use")
 	if sshCmd := os.Getenv("SSH_ORIGINAL_COMMAND"); sshCmd != "" {
 		clientFlags.Parse(strings.Fields(sshCmd))
+		if clientFlags.NArg() != 0 {
+			zfs.Fatal("unexpected SSH receiver arguments", "args", clientFlags.Args())
+		}
 	}
 	clientFlags.Parse(receiverFlags.Args())
+	if clientFlags.NArg() != 0 {
+		zfs.Fatal("unexpected receiver arguments", "args", clientFlags.Args())
+	}
 
 	if !*fast && !zfs.Exists(baseDS) {
 		zfs.Fatal("base dataset does not exist", "base_dataset", baseDS)
@@ -291,7 +334,7 @@ func Main() {
 	case "set_placeholders":
 		setPlaceholders(baseDS, *dataset)
 	case "receive":
-		receive(baseDS, *dataset, *compression, cfg, *fast)
+		zfs.FatalIfError(receive(baseDS, *dataset, *compression, cfg, *fast), "receive pipeline failed: %w")
 	default:
 		zfs.Fatal("unknown operation", "op", *op)
 	}

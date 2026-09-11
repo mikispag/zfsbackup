@@ -42,6 +42,8 @@ Five independent modules. Mix and match — use only what you need. Or run them 
 zfsbackup run --config /etc/zfsbackup/mypool.json
 ```
 
+Pass `--dry-run` to preview snapshot creation and deletion and skip the sender. Monitoring still runs and updates its configured output file.
+
 <details>
 <summary>Systemd units</summary>
 
@@ -341,6 +343,8 @@ The `receiver` field is the command used to invoke the receiver — typically an
 > Placeholder bookmarks are created automatically after every successful send. A bookmark named `#<snap>-dst<hash>` is created on the source for each destination, derived from `receiver`, so source snapshots can be safely pruned by the deleter without breaking the incremental chain to any destination. No configuration is needed.
 >
 > Set `placeholders` explicitly only when you need a human-readable name. Each destination must use a distinct suffix.
+
+A placeholder suffix reserves every bookmark ending in `-<suffix>` on its filesystem. After creating the new checkpoint, zfsbackup removes older bookmarks with that suffix, including before-send bookmarks. Keep suffixes distinct across separate jobs and manually managed bookmarks as well.
 
 **Key sender-level options** (apply to all destinations):
 

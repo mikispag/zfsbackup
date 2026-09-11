@@ -14,6 +14,13 @@ import (
 
 var dsRegexp = regexp.MustCompile(`^[A-Z0-9a-z_.:-]+(/[A-Z0-9a-z_.:-]+)*$`)
 
+var placeholderRegexp = regexp.MustCompile(`^[A-Za-z0-9_.:]+$`)
+
+// IsValidPlaceholder reports whether name is a safe, hyphen-free bookmark suffix.
+func IsValidPlaceholder(name string) bool {
+	return placeholderRegexp.MatchString(name) && name != "." && name != ".."
+}
+
 // IsValidZFSDataset returns an error if name is not a valid ZFS dataset path.
 func IsValidZFSDataset(name string) error {
 	if !dsRegexp.MatchString(name) {
@@ -368,13 +375,8 @@ func BookmarkName(fullname string) string {
 // zfsGcPlaceholder removes any placeholder bookmarks on the same filesystem
 // that share the same placeholder suffix but differ from toKeep.
 //
-// A bookmark whose name has the form "<S>-<placeholder>" is destroyed only if
-// no snapshot named "@<S>" currently exists on the filesystem. Placeholders are
-// designed to outlive their source snapshot — so if @<S> still exists, the
-// bookmark is much more likely a user-managed object that coincidentally shares
-// the suffix than an obsolete placeholder. Stale placeholders for not-yet-pruned
-// snapshots are collected on a subsequent run once the deleter removes the
-// source snapshot.
+// The configured suffix owns one checkpoint per filesystem, including its
+// temporary before-send bookmark. Other suffixes and snapshots are untouched.
 func zfsGcPlaceholder(toKeep string) error {
 	arr := strings.Split(toKeep, "-")
 	if len(arr) < 2 {
@@ -386,14 +388,6 @@ func zfsGcPlaceholder(toKeep string) error {
 	if err != nil {
 		return err
 	}
-	snaps, err := ZfsList([]string{"name"}, "snapshot", fs)
-	if err != nil {
-		return err
-	}
-	existingSnaps := make(map[string]bool, len(snaps))
-	for _, s := range snaps {
-		existingSnaps[SnapshotName(s[0])] = true
-	}
 	suffix := "-" + placeholder
 	for _, b := range bookmarks {
 		if b[0] == toKeep {
@@ -401,12 +395,6 @@ func zfsGcPlaceholder(toKeep string) error {
 		}
 		name := BookmarkName(b[0])
 		if !strings.HasSuffix(name, suffix) {
-			continue
-		}
-		snapPart := strings.TrimSuffix(name, suffix)
-		if existingSnaps[snapPart] {
-			slog.Debug("skipping GC of bookmark; source snapshot still exists",
-				"bookmark", b[0], "snap", snapPart)
 			continue
 		}
 		slog.Info("destroying obsolete placeholder bookmark", "bookmark", b[0])
@@ -422,7 +410,7 @@ func zfsGcPlaceholder(toKeep string) error {
 // interrupted backup runs.
 func zfsBookmarkIdempotent(src, dst string) error {
 	if _, err := DefaultExecCommand(context.Background(), "zfs", "bookmark", src, dst).Output(); err != nil {
-		existing, listErr := ZfsList([]string{"name"}, "bookmark", FSName(src))
+		existing, listErr := ZfsList([]string{"name", "guid"}, "bookmark", FSName(src))
 		if listErr != nil {
 			slog.Debug("cannot list bookmarks after failed bookmark creation; assuming bookmark does not exist",
 				"err", listErr, "src", src)
@@ -431,6 +419,13 @@ func zfsBookmarkIdempotent(src, dst string) error {
 		fullDst := FSName(src) + dst
 		for _, row := range existing {
 			if row[0] == fullDst {
+				guid, guidErr := ZfsGet(src, "guid")
+				if guidErr != nil {
+					return fmt.Errorf("cannot verify existing bookmark %s: %w", fullDst, guidErr)
+				}
+				if strings.TrimSpace(guid) != row[1] {
+					return fmt.Errorf("bookmark %s exists with a different GUID: %w", fullDst, err)
+				}
 				return nil
 			}
 		}
@@ -442,16 +437,44 @@ func zfsBookmarkIdempotent(src, dst string) error {
 // ZfsSetBeforeBookmark creates a "before-send" bookmark for src, named
 // #<snapname>-before-<placeholderName>. Idempotent.
 func ZfsSetBeforeBookmark(src, placeholderName string) error {
-	return zfsBookmarkIdempotent(src, "#"+SnapshotName(src)+"-before-"+placeholderName)
+	name, err := placeholderSourceName(src, placeholderName)
+	if err != nil {
+		return err
+	}
+	return zfsBookmarkIdempotent(src, "#"+name+"-before-"+placeholderName)
 }
 
 // ZfsSetPlaceholder creates a placeholder bookmark for src, named
 // #<snapname>-<placeholderName>, and garbage-collects older placeholders
 // with the same suffix. Idempotent.
 func ZfsSetPlaceholder(src, placeholderName string) error {
-	newbm := "#" + SnapshotName(src) + "-" + placeholderName
+	name, err := placeholderSourceName(src, placeholderName)
+	if err != nil {
+		return err
+	}
+	if strings.Contains(src, "#") {
+		name = strings.TrimSuffix(name, "-"+placeholderName)
+	}
+	newbm := "#" + name + "-" + placeholderName
 	if err := zfsBookmarkIdempotent(src, newbm); err != nil {
 		return err
 	}
 	return zfsGcPlaceholder(FSName(src) + newbm)
+}
+
+func placeholderSourceName(src, placeholderName string) (string, error) {
+	if !IsValidPlaceholder(placeholderName) {
+		return "", fmt.Errorf("invalid placeholder suffix %q", placeholderName)
+	}
+	parts := strings.FieldsFunc(src, func(r rune) bool { return r == '@' || r == '#' })
+	if len(parts) != 2 || strings.Count(src, "@")+strings.Count(src, "#") != 1 {
+		return "", fmt.Errorf("invalid snapshot or bookmark source %q", src)
+	}
+	if err := IsValidZFSDataset(parts[0]); err != nil {
+		return "", err
+	}
+	if err := IsValidZFSDataset(parts[1]); err != nil || strings.Contains(parts[1], "/") {
+		return "", fmt.Errorf("invalid snapshot or bookmark component %q", parts[1])
+	}
+	return parts[1], nil
 }

@@ -27,7 +27,7 @@ package config
 //   - LastSnapshot and GUID are non-empty: continue incrementally from the
 //     identified snapshot.
 //   - All fields are zero: the destination dataset exists but has no common
-//     base with the source; the sender skips this filesystem unless
+//     base with the source; the sender reports an error unless
 //     ForceOverwrite is set, in which case it transmits a full stream and
 //     the receiver applies zfs receive -F.
 type IncrementalSuggestions struct {

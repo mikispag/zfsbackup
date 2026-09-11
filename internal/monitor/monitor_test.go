@@ -1,7 +1,10 @@
 package monitor
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -184,5 +187,84 @@ func TestMonAsPrometheus_ordering_headersBeforeValues(t *testing.T) {
 	}
 	if !strings.HasPrefix(lines[2], "Foo") {
 		t.Errorf("line 2 should be metric value, got %q", lines[2])
+	}
+}
+
+func TestMonAsPrometheusGroupsMetricFamilies(t *testing.T) {
+	m := &mon{metrics: []metric{
+		{Name: "Age", Dimensions: map[string]string{"fs": "tank/a"}, Value: 1},
+		{Name: "Timestamp", Dimensions: map[string]string{"fs": "tank/a"}, Value: 2},
+		{Name: "Age", Dimensions: map[string]string{"fs": "tank/b"}, Value: 3},
+		{Name: "Timestamp", Dimensions: map[string]string{"fs": "tank/b"}, Value: 4},
+	}}
+	want := "# HELP Age zfsbackup metric\n# TYPE Age untyped\nAge{fs=\"tank/a\"} 1\nAge{fs=\"tank/b\"} 3\n" +
+		"# HELP Timestamp zfsbackup metric\n# TYPE Timestamp untyped\nTimestamp{fs=\"tank/a\"} 2\nTimestamp{fs=\"tank/b\"} 4\n"
+	if got := m.asPrometheus(); got != want {
+		t.Errorf("metric families are not grouped:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestWritePrometheusFileConcurrent(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "metrics.prom")
+	var wg sync.WaitGroup
+	for i := range 16 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := writePrometheusFile(filePath, strings.Repeat(string(rune('a'+i)), 8192)); err != nil {
+				t.Errorf("writePrometheusFile: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(content) != 8192 || strings.Trim(string(content), string(content[0])) != "" {
+		t.Fatal("published file does not contain one complete output")
+	}
+	info, err := os.Stat(filePath)
+	if err != nil || info.Mode().Perm() != 0o644 {
+		t.Fatalf("output permissions: info=%v, err=%v", info, err)
+	}
+	files, err := os.ReadDir(dir)
+	if err != nil || len(files) != 1 {
+		t.Fatalf("temporary files remain: files=%v, err=%v", files, err)
+	}
+}
+
+func TestWritePrometheusFileIgnoresLegacyTempSymlink(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "metrics.prom")
+	victim := filepath.Join(dir, "unrelated")
+	if err := os.WriteFile(victim, []byte("original"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(victim, filePath+".tmp"); err != nil {
+		t.Fatal(err)
+	}
+	if err := writePrometheusFile(filePath, "updated"); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(victim)
+	if err != nil || string(content) != "original" {
+		t.Fatalf("symlink target modified: content=%q, err=%v", content, err)
+	}
+}
+
+func TestWritePrometheusFileCleansUpAfterRenameFailure(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "metrics.prom")
+	if err := os.Mkdir(filePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := writePrometheusFile(filePath, "updated"); err == nil {
+		t.Fatal("publishing over a directory should fail")
+	}
+	files, err := os.ReadDir(dir)
+	if err != nil || len(files) != 1 || files[0].Name() != "metrics.prom" {
+		t.Fatalf("temporary files remain: files=%v, err=%v", files, err)
 	}
 }
