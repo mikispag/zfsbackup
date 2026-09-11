@@ -160,6 +160,9 @@ func (fsp *fsProcessor) sendPlaceholders() error {
 			GUID: guid,
 		})
 	}
+	if len(sp.Placeholders) == 0 {
+		return nil
+	}
 	slog.Debug("sending placeholders", "placeholders", sp)
 	spBytes, err := json.Marshal(sp)
 	if err != nil {
@@ -362,8 +365,8 @@ func (fsp *fsProcessor) ProcessFs() error {
 	if err := fsp.FillSources(); err != nil {
 		return err
 	}
-	if len(fsp.PotentialSnapsToSend()) == 0 && len(fsp.dst.SyncPlaceholders) == 0 {
-		return nil
+	if len(fsp.PotentialSnapsToSend()) == 0 {
+		return fsp.sendPlaceholders()
 	}
 	retriesLeft := 20
 	for {

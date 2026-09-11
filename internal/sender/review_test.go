@@ -95,6 +95,46 @@ func TestReceiverCommandPreservesArguments(t *testing.T) {
 	}
 }
 
+func TestPlaceholderSyncWithoutSnapshots(t *testing.T) {
+	if os.Getenv("ZFSBACKUP_SYNC_ONLY_TEST") == "1" {
+		fsp := &fsProcessor{fs: "tank", job: &config.SenderConfig{}, dst: &config.DestinationConfig{
+			Receiver: os.Getenv("ZFSBACKUP_TEST_RECEIVER"), SyncPlaceholders: []string{"peer"},
+		}}
+		if err := fsp.sendPlaceholders(); err != nil {
+			t.Fatal(err)
+		}
+		if err := fsp.ProcessFs(); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	for _, suffix := range []string{"", "other", "peer"} {
+		t.Run("suffix="+suffix, func(t *testing.T) {
+			dir := t.TempDir()
+			payload := `{"datasets":{}}`
+			if suffix != "" {
+				payload = `{"datasets":{"tank#snap-` + suffix + `":{"properties":{"guid":{"value":"7"},"createtxg":{"value":"10"}}}}}`
+			}
+			if err := os.WriteFile(filepath.Join(dir, "zfs"), []byte("#!/bin/sh\nprintf '%s' '"+payload+"'\n"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			receiver := filepath.Join(dir, "receiver")
+			script := "#!/bin/sh\nexit 1\n"
+			if suffix == "peer" {
+				script = "#!/bin/sh\ntest \"$1\" = --op=set_placeholders || exit 1\ncat >/dev/null\n"
+			}
+			if err := os.WriteFile(receiver, []byte(script), 0700); err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.Command(os.Args[0], "-test.run=^TestPlaceholderSyncWithoutSnapshots$")
+			cmd.Env = append(os.Environ(), "ZFSBACKUP_SYNC_ONLY_TEST=1", "ZFSBACKUP_TEST_RECEIVER="+receiver, "PATH="+dir+":"+os.Getenv("PATH"))
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("placeholder-only sync failed: %v\n%s", err, out)
+			}
+		})
+	}
+}
+
 func TestSenderPipeline(t *testing.T) {
 	if os.Getenv("ZFSBACKUP_PIPELINE_TEST") == "1" {
 		dir := os.Getenv("ZFSBACKUP_PIPELINE_DIR")
