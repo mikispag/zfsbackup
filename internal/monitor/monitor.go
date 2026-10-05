@@ -180,7 +180,11 @@ func (m *mon) run() error {
 	if len(errs) != 0 {
 		success = 0
 	}
-	m.metrics = append(m.metrics, metric{Name: "MonitorSuccess", Value: success, EvalTimestamp: time.Now()})
+	collectedAt := time.Now()
+	m.metrics = append(m.metrics,
+		metric{Name: "MonitorSuccess", Value: success, EvalTimestamp: collectedAt},
+		metric{Name: "MonitorCollectionTimestamp", Value: collectedAt.Unix(), EvalTimestamp: collectedAt},
+	)
 	output := m.asPrometheus()
 	if filePath := m.cfg.PrometheusOutput; filePath != "" {
 		if err := writePrometheusFile(filePath, output); err != nil {

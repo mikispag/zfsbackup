@@ -465,9 +465,29 @@ systemctl enable --now zfsbackup-monitor.timer
 }
 ```
 
-Write your own alerting rules against the exported `LastSnapAge` and `LastSnapTimestamp` metrics.
+`LastSnapAge` is calculated when the monitor runs and stays unchanged until the next run. For an age that increases between collections, query the snapshot timestamp:
 
-A filesystem with no snapshots exports `LastSnapTimestamp=0` and `LastSnapAge` as the seconds since the Unix epoch, so ordinary freshness thresholds still alert. `MonitorSuccess` is `1` when all configured metrics were collected and `0` when any collection failed. Alert on `MonitorSuccess == 0` as well: the monitor publishes the metrics it could collect and exits unsuccessfully if a pool or dataset query fails.
+```promql
+time() - LastSnapTimestamp
+```
+
+`MonitorCollectionTimestamp` records when the collection attempt finished, in Unix seconds, including attempts with collection errors. A successful Prometheus scrape does not mean the monitor ran recently. Preserve this metric and `MonitorSuccess` when forwarding metrics between hosts.
+
+Use separate alerts for snapshot freshness, missing snapshots, collection errors, and stale collection. For example:
+
+| Condition | PromQL expression |
+|---|---|
+| Existing snapshot older than 24 hours | `(time() - LastSnapTimestamp > 24 * 60 * 60) and (LastSnapTimestamp > 0)` |
+| Filesystem has no snapshots | `LastSnapTimestamp == 0` |
+| Collection failed | `MonitorSuccess == 0` |
+| Collection older than 5 hours | `time() - MonitorCollectionTimestamp > 5 * 60 * 60` |
+| Pool is unhealthy | `HasBrokenPool > 0` |
+
+The five-hour collection threshold allows an hour of delay for the four-hour timer above. Adjust both thresholds to your backup and monitoring schedules. Run the monitor after backup completion, or schedule it often enough for the required alerting delay: a snapshot created after collection is only visible on the next run. Monitor exporter availability and missing metric series separately.
+
+A filesystem with no snapshots exports `LastSnapTimestamp=0` and `LastSnapAge` as seconds since the Unix epoch, so ordinary freshness thresholds still alert. Include only expected backup datasets in the monitor's `include` list to avoid alerting on empty container datasets; includes expand recursively.
+
+`MonitorSuccess` is `1` when all configured metrics were collected and `0` when any collection failed. It describes collection success, so it can be `1` even when snapshots are absent or a pool is unhealthy. The monitor publishes the metrics it could collect and exits unsuccessfully if a pool or dataset query fails. Snapshot freshness also does not establish successful replication: for backup freshness, monitor the expected received datasets on the destination, accounting for any snapshots created locally there.
 
 > [!NOTE]
 > No root required if `zpool` is in PATH. On many distributions it is root-only — check yours.

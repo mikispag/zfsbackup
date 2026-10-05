@@ -982,6 +982,9 @@ LastSnapTimestamp\{fs="$TESTFS/sender/mypool/fs2/sub"\} 1[0-9]{9}
 # HELP MonitorSuccess zfsbackup metric
 # TYPE MonitorSuccess untyped
 MonitorSuccess 1
+# HELP MonitorCollectionTimestamp zfsbackup metric
+# TYPE MonitorCollectionTimestamp untyped
+MonitorCollectionTimestamp 1[0-9]{9}
 
 EOM
 }

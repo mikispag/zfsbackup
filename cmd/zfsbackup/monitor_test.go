@@ -46,6 +46,7 @@ fi
 		{name: "snapshot listing fails", env: []string{"ZFSBACKUP_TEST_SNAP_ERROR=1"}, wantError: true, wantMetric: "HasBrokenPool 0"},
 		{name: "faulted pool discovery fails", env: []string{"ZFSBACKUP_TEST_FS_ERROR=1", "ZFSBACKUP_TEST_POOL_FAULTED=1"}, wantError: true, wantMetric: "HasBrokenPool 1"},
 		{name: "pool listing fails", env: []string{"ZFSBACKUP_TEST_POOL_ERROR=1"}, wantError: true, wantMetric: `LastSnapTimestamp{fs="tank/data"} 123`},
+		{name: "all collection fails", env: []string{"ZFSBACKUP_TEST_POOL_ERROR=1", "ZFSBACKUP_TEST_FS_ERROR=1"}, wantError: true, wantMetric: "MonitorSuccess 0"},
 		{name: "partial discovery failure", include: []string{"missing", "tank"}, wantError: true, wantMetric: `LastSnapTimestamp{fs="tank/data"} 123`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -77,6 +78,7 @@ fi
 			cmd.Env = append(cmd.Env, tc.env...)
 			before := time.Now().Unix()
 			output, err := cmd.CombinedOutput()
+			after := time.Now().Unix()
 			if (err != nil) != tc.wantError {
 				t.Fatalf("monitor: err=%v, output=%s", err, output)
 			}
@@ -92,6 +94,19 @@ fi
 				if !strings.Contains(string(metrics), want+"\n") {
 					t.Errorf("missing %q in metrics:\n%s", want, metrics)
 				}
+			}
+			collectionTimestamps := 0
+			for _, line := range strings.Split(string(metrics), "\n") {
+				if value, found := strings.CutPrefix(line, "MonitorCollectionTimestamp "); found {
+					collectionTimestamps++
+					timestamp, err := strconv.ParseInt(value, 10, 64)
+					if err != nil || timestamp < before || timestamp > after {
+						t.Errorf("collection timestamp %q is outside run interval [%d, %d]", value, before, after)
+					}
+				}
+			}
+			if collectionTimestamps != 1 {
+				t.Errorf("got %d collection timestamps; want 1", collectionTimestamps)
 			}
 			if !strings.Contains(string(output), string(metrics)) {
 				t.Errorf("stdout does not contain published metrics: %s", output)
