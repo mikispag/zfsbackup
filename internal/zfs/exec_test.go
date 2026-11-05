@@ -90,15 +90,15 @@ func TestCompressionProg_zstdUpperCase(t *testing.T) {
 // original reader unchanged and no command.
 func TestMaybeMbuffer_noArgs_returnsInputUnchanged(t *testing.T) {
 	original := io.NopCloser(strings.NewReader("hello"))
-	got, cmd, err := MaybeMbuffer(nil, nil, original)
+	got, cmd, err := MaybeMbuffer(context.Background(), nil, original)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got != original {
-		t.Error("MaybeMbuffer(nil, nil, input) should return input unchanged")
+		t.Error("MaybeMbuffer with nil args should return input unchanged")
 	}
 	if cmd != nil {
-		t.Error("MaybeMbuffer(nil, nil, input) should return nil cmd")
+		t.Error("MaybeMbuffer with nil args should return nil cmd")
 	}
 }
 
@@ -112,7 +112,7 @@ func TestParseTabular_commandFails_returnsError(t *testing.T) {
 
 func TestMaybeMbuffer_emptySlice_returnsInputUnchanged(t *testing.T) {
 	original := io.NopCloser(strings.NewReader("data"))
-	got, cmd, err := MaybeMbuffer(nil, []string{}, original)
+	got, cmd, err := MaybeMbuffer(context.Background(), []string{}, original)
 	if err != nil {
 		t.Fatal(err)
 	}

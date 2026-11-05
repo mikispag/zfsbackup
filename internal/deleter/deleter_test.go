@@ -21,28 +21,6 @@ func makeSnap(name string, secondsFromBase int64, base time.Time) snapshot {
 	}
 }
 
-// preservedNames returns the names of all preserved snapshots.
-func preservedNames(snaps []snapshot) []string {
-	var names []string
-	for _, s := range snaps {
-		if s.preserve {
-			names = append(names, s.Name)
-		}
-	}
-	return names
-}
-
-// deletedNames returns the names of all non-preserved snapshots.
-func deletedNames(snaps []snapshot) []string {
-	var names []string
-	for _, s := range snaps {
-		if !s.preserve {
-			names = append(names, s.Name)
-		}
-	}
-	return names
-}
-
 // ─── preserveTopN ────────────────────────────────────────────────────────────
 
 func TestPreserveTopN_topNLessThanLen(t *testing.T) {
@@ -180,18 +158,6 @@ func TestPreserveNewerThan_invalidDuration_returnsError(t *testing.T) {
 }
 
 // ─── markForPreservation (interval logic) ────────────────────────────────────
-
-// buildHourlySnaps creates n snapshots, each 1 hour apart ending at `end`.
-func buildHourlySnaps(n int, end time.Time) []snapshot {
-	snaps := make([]snapshot, n)
-	for i := 0; i < n; i++ {
-		age := time.Duration(n-1-i) * time.Hour
-		snaps[i] = makeSnap("snap"+strings.Repeat("0", 3-len(string(rune('0'+i))))+string(rune('0'+i%10)),
-			int64((end.Add(-age)).Unix()-end.Add(-time.Duration(n-1)*time.Hour).Unix()),
-			end.Add(-time.Duration(n-1)*time.Hour))
-	}
-	return snaps
-}
 
 func TestMarkForPreservation_recentAndOldSnap_multiIntervalRule(t *testing.T) {
 	// old is 7 days ago, recent is ≈ now. With a 3-day interval and Count=4,
