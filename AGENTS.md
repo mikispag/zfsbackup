@@ -261,7 +261,7 @@ CI (`.github/workflows/ci.yml`) additionally gates on `go mod tidy -diff`, stati
 |---|---|
 | `internal/config` | `ResolveInclude`/`ResolveExclude`; full JSON round-trip of all wire types (`IncrementalSuggestions`, `SetPlaceholders`, `PlaceholderEntry`) including `omitempty` and exact field name checks |
 | `internal/zfs` | `ParseDuration` (valid, invalid, ParseInt overflow); `IsValidZFSDataset` (valid names, invalid names, `.`/`..` components); `ParseTabular` (success, empty output, command fails); `Group`/`NewGroup`/`Go`/`Wait` (success, error propagation, context cancellation, first-error-wins) |
-| `internal/sender` | `autoPlaceholderName` (stability, whitespace normalization, no hyphens, distinct names); `compressionType` (empty→"none", explicit value); `PotentialSnapsToSend`; `ActualSnapsToSend` (no base, intermediate, placeholder-driven mandatory); `getIncrementalParam` |
+| `internal/sender` | `autoPlaceholderName` (stability, whitespace normalization, no hyphens, distinct names); `compressionType` (empty→"none", explicit value); `PotentialSnapsToSend`; `ActualSnapsToSend` (no base, intermediate, placeholder-driven mandatory, bookmark base); `baseFor` (snapshot preferred over a bookmark with the same GUID); `incrementalArgs` |
 | `internal/deleter` | `preserveTopN`; `preserveNewerThan`; `markForPreservation` (interval rules, holes, invalid duration, snap outside window, large-interval bias capping, invalid `preserve_newer_than` path); `newDeleteFsProcessor` (valid/invalid regexp); `deleteManySnaps` (nil/empty list) |
 | `internal/monitor` | `metric.asPrometheus` (no dims, one dim, multiple dims, negative value); `mon.asPrometheus` (HELP/TYPE headers, dedup, ordering) |
 
@@ -275,7 +275,7 @@ Unit tests create `deleteFsProcessor` and `fsProcessor` structs directly — the
 
 2. **Sender and Receiver are a matched pair**: they communicate via JSON on stdin/stdout. The sender's `receiver` must invoke the same version of the receiver binary. Protocol changes require updating both sides.
 
-3. **Never break the incremental chain**: if you remove placeholder bookmark logic or change the GUID-matching in `ActualSnapsToSend`, the sender will fall back to full sends, which can be extremely expensive. Verify with the existing `ActualSnapsToSend` tests before changing selection logic.
+3. **Never break the incremental chain**: if you remove placeholder bookmark logic or change the GUID-matching in `baseFor`/`ActualSnapsToSend`, the sender will fall back to full sends, which can be extremely expensive. Verify with the existing `ActualSnapsToSend` tests before changing selection logic.
 
 4. **Config files are flocked**: keep the `*os.File` returned by `LoadConfig` open until the entire job completes. This serializes jobs using the same config inode. Different config files or atomic file replacement do not share that lock. The read-only receiver config remains exempt.
 

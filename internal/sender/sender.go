@@ -19,118 +19,96 @@ import (
 	"github.com/mikispag/zfsbackup/internal/zfs"
 )
 
-const (
-	Unknown  = iota
-	Snapshot = iota
-	Bookmark = iota
-)
-
+// source is a snapshot ("fs@name") or bookmark ("fs#name") of the filesystem
+// being sent.
 type source struct {
-	Name    string
-	GUID    string
-	Srctype int
+	Name string
+	GUID string
+}
+
+func (s source) isSnapshot() bool { return strings.Contains(s.Name, "@") }
+
+// plan is the receiver's state for one filesystem, resolved against the
+// local sources.
+type plan struct {
+	base           source // incremental base; zero when there is none
+	resumeToken    string
+	sendFull       bool // the destination does not exist yet
+	forceOverwrite bool // the receiver allows zfs receive -F for this destination
 }
 
 // fsProcessor handles sending all snapshots for one (filesystem, destination)
 // pair. job holds the per-job settings that are shared across all destinations;
 // dst holds the settings specific to the destination being processed.
 type fsProcessor struct {
-	fs             string
-	job            *config.SenderConfig
-	dst            *config.DestinationConfig
-	snapRe         *regexp.Regexp // compiled from job.SnapshotRegex in NewFSProcessor
-	sources        []source
-	resumeToken    string
-	incremental    source
-	sendFull       bool
-	forceOverwrite bool
+	fs      string
+	job     *config.SenderConfig
+	dst     *config.DestinationConfig
+	snapRe  *regexp.Regexp // compiled from job.SnapshotRegex in NewFSProcessor
+	sources []source       // snapshots and bookmarks in createtxg order
 }
 
 func (fsp *fsProcessor) PotentialSnapsToSend() []source {
 	var ret []source
 	for _, s := range fsp.sources {
-		if s.Srctype == Snapshot && fsp.snapRe.MatchString(zfs.SnapshotName(s.Name)) {
+		if s.isSnapshot() && fsp.snapRe.MatchString(zfs.SnapshotName(s.Name)) {
 			ret = append(ret, s)
 		}
 	}
 	return ret
 }
 
-func (fsp *fsProcessor) ActualSnapsToSend() []source {
-	re := fsp.snapRe
-	interestingGUIDs := make(map[string]bool)
-
-	// Pass 1: identify GUIDs of placeholder bookmarks that must also be sent so
-	// the destination accumulates the corresponding snapshots.
-	metSource := fsp.incremental.Srctype == Unknown
-	for _, s := range fsp.sources {
-		if s.GUID == fsp.incremental.GUID {
-			metSource = true
-			continue
-		}
-		if !metSource || s.Srctype != Bookmark {
-			continue
-		}
-		for _, p := range fsp.dst.SyncPlaceholders {
-			if strings.HasSuffix(s.Name, "-"+p) {
-				interestingGUIDs[s.GUID] = true
-			}
-		}
-	}
-
-	// Pass 2: walk source-ordered (createtxg-ordered) snapshots, recording
-	// matches and the index of the newest matching snap.
-	metSource = fsp.incremental.Srctype == Unknown
-	type entry struct {
+// ActualSnapsToSend returns, in createtxg order, the snapshots newer than base
+// that must be sent: the newest one matching snapshot_re (or every matching one
+// with send_intermediate), plus any snapshot targeted by a sync_placeholders
+// bookmark, so that the destination receives it even outside snapshot_re.
+// A zero base selects from the oldest source.
+func (fsp *fsProcessor) ActualSnapsToSend(base source) []source {
+	type candidate struct {
 		snap    source
 		matches bool
 	}
-	var entries []entry
-	newestMatchingIdx := -1
+	var candidates []candidate
+	placeholderGUIDs := make(map[string]bool)
+	newest := -1
+	afterBase := base.GUID == ""
+	// Collect first: a placeholder bookmark shares its snapshot's createtxg, so
+	// it can be listed after the snapshot it marks.
 	for _, s := range fsp.sources {
-		if s.GUID == fsp.incremental.GUID {
-			metSource = true
+		if base.GUID != "" && s.GUID == base.GUID {
+			afterBase = true
 			continue
 		}
-		if !metSource || s.Srctype != Snapshot {
+		if !afterBase {
 			continue
 		}
-		match := re.MatchString(zfs.SnapshotName(s.Name))
-		if match {
-			newestMatchingIdx = len(entries)
-		}
-		entries = append(entries, entry{snap: s, matches: match})
-	}
-
-	// Pass 3: mark which entries to send.
-	toSend := make([]bool, len(entries))
-	for i, e := range entries {
-		if interestingGUIDs[e.snap.GUID] {
-			toSend[i] = true
-			slog.Info("sending snapshot due to placeholder", "snap", e.snap.Name)
-		}
-	}
-	if newestMatchingIdx >= 0 {
-		if fsp.job.SendIntermediate {
-			for i, e := range entries {
-				if e.matches {
-					toSend[i] = true
+		if !s.isSnapshot() {
+			for _, p := range fsp.dst.SyncPlaceholders {
+				if strings.HasSuffix(s.Name, "-"+p) {
+					placeholderGUIDs[s.GUID] = true
 				}
 			}
-		} else {
-			toSend[newestMatchingIdx] = true
-			slog.Debug("sending most recent matching snapshot", "snap", entries[newestMatchingIdx].snap.Name)
+			continue
 		}
+		matches := fsp.snapRe.MatchString(zfs.SnapshotName(s.Name))
+		if matches {
+			newest = len(candidates)
+		}
+		candidates = append(candidates, candidate{snap: s, matches: matches})
 	}
 
-	// Pass 4: emit in source (createtxg) order so incremental sends are valid.
-	var mandatory []source
-	for i, e := range entries {
-		if toSend[i] {
-			mandatory = append(mandatory, e.snap)
+	var toSend []source
+	for i, c := range candidates {
+		switch {
+		case placeholderGUIDs[c.snap.GUID]:
+			slog.Info("sending snapshot due to placeholder", "snap", c.snap.Name)
+		case c.matches && (fsp.job.SendIntermediate || i == newest):
+		default:
+			continue
 		}
+		toSend = append(toSend, c.snap)
 	}
-	return mandatory
+	return toSend
 }
 
 func (fsp *fsProcessor) sendPlaceholders() error {
@@ -180,32 +158,29 @@ func (fsp *fsProcessor) sendPlaceholders() error {
 	return nil
 }
 
-func (fsp *fsProcessor) GetIncrementalSuggestions() error {
+// fetchPlan asks the receiver what it already holds for this filesystem.
+func (fsp *fsProcessor) fetchPlan() (plan, error) {
 	cmd := buildReceiverCmd(context.Background(), fsp.dst.Receiver,
 		"--op=incremental_suggestions", "--dataset="+fsp.fs)
 	out, err := cmd.Output()
 	if err != nil {
-		return fmt.Errorf("cannot get incremental suggestions for %s: %w", fsp.fs, err)
+		return plan{}, fmt.Errorf("cannot get incremental suggestions for %s: %w", fsp.fs, err)
 	}
 	is := &config.IncrementalSuggestions{}
 	if err := json.Unmarshal(out, is); err != nil {
-		return fmt.Errorf("cannot decode IncrementalSuggestions: %w", err)
+		return plan{}, fmt.Errorf("cannot decode IncrementalSuggestions: %w", err)
 	}
 	slog.Debug("incremental suggestions", "suggestions", is, "fs", fsp.fs)
-	fsp.forceOverwrite = is.ForceOverwrite
-
+	p := plan{forceOverwrite: is.ForceOverwrite}
 	if is.SendFull {
-		fsp.incremental = source{}
-		fsp.sendFull = true
-		return nil
+		p.sendFull = true
+		return p, nil
 	}
-	fsp.resumeToken = is.ResumeToken
+	p.resumeToken = is.ResumeToken
 	if is.LastSnapshot != "" && is.GUID != "" {
-		if base, ok := fsp.baseFor(is.GUID); ok {
-			fsp.incremental = base
-		}
+		p.base, _ = fsp.baseFor(is.GUID)
 	}
-	return nil
+	return p, nil
 }
 
 // baseFor returns the local source with the given GUID to use as the
@@ -219,7 +194,7 @@ func (fsp *fsProcessor) baseFor(guid string) (source, bool) {
 		if s.GUID != guid {
 			continue
 		}
-		if s.Srctype == Snapshot {
+		if s.isSnapshot() {
 			return s, true
 		}
 		if !found {
@@ -236,30 +211,21 @@ func (fsp *fsProcessor) FillSources() error {
 		return err
 	}
 	for _, arr := range found {
-		var srctype int
-		switch {
-		case strings.Contains(arr[0], "@"):
-			srctype = Snapshot
-		case strings.Contains(arr[0], "#"):
-			srctype = Bookmark
-		default:
+		if !strings.ContainsAny(arr[0], "@#") {
 			return fmt.Errorf("%s is neither a snapshot nor a bookmark", arr[0])
 		}
-		fsp.sources = append(fsp.sources, source{Name: arr[0], GUID: arr[1], Srctype: srctype})
+		fsp.sources = append(fsp.sources, source{Name: arr[0], GUID: arr[1]})
 	}
 	return nil
 }
 
-func (fsp *fsProcessor) getIncrementalParam() []string {
-	switch fsp.incremental.Srctype {
-	case Unknown:
-		return nil
-	case Bookmark, Snapshot:
-		return []string{"-i", fsp.incremental.Name}
-	default:
-		zfs.Fatal("unexpected incremental source type", "srctype", fsp.incremental.Srctype)
+// incrementalArgs returns the zfs send flags for an incremental stream from
+// base, or nil for a full stream when base is zero.
+func incrementalArgs(base source) []string {
+	if base.Name == "" {
 		return nil
 	}
+	return []string{"-i", base.Name}
 }
 
 func (fsp *fsProcessor) setPlaceholdersBefore(snap source) error {
@@ -375,7 +341,7 @@ func (fsp *fsProcessor) ProcessFs() error {
 	if err := fsp.FillSources(); err != nil {
 		return err
 	}
-	if len(fsp.ActualSnapsToSend()) == 0 {
+	if len(fsp.ActualSnapsToSend(source{})) == 0 {
 		return fsp.sendPlaceholders()
 	}
 	retriesLeft := 20
@@ -395,31 +361,25 @@ func (fsp *fsProcessor) ProcessFs() error {
 }
 
 func (fsp *fsProcessor) GetNextAndSend() (retry bool, err error) {
-	fsp.resumeToken = ""
-	fsp.incremental = source{}
-	fsp.sendFull = false
-	fsp.forceOverwrite = false
-
-	if err := fsp.GetIncrementalSuggestions(); err != nil {
+	p, err := fsp.fetchPlan()
+	if err != nil {
 		return false, err
 	}
 
-	if !fsp.sendFull && fsp.resumeToken == "" && fsp.incremental.Srctype == Unknown {
-		if fsp.forceOverwrite {
-			slog.Info("receiver has dataset with no common base; sending full stream because destination is in force_overwrite_datasets", "fs", fsp.fs)
-			fsp.sendFull = true
-		} else {
+	if !p.sendFull && p.resumeToken == "" && p.base.Name == "" {
+		if !p.forceOverwrite {
 			return false, fmt.Errorf("receiver has dataset %s with no common incremental base; recovery is required before backup can continue", fsp.fs)
 		}
+		slog.Info("receiver has dataset with no common base; sending full stream because destination is in force_overwrite_datasets", "fs", fsp.fs)
 	}
 
-	if fsp.resumeToken != "" {
+	if p.resumeToken != "" {
 		sendArgs := []string{"send"}
 		if fsp.dst.RawSend {
 			sendArgs = append(sendArgs, "-w")
 		}
-		sendArgs = append(sendArgs, "-t", fsp.resumeToken)
-		snap, err := fsp.resumeSnapshot(sendArgs)
+		sendArgs = append(sendArgs, "-t", p.resumeToken)
+		snap, err := fsp.resumeSnapshot(sendArgs, p.base)
 		if err != nil {
 			return false, err
 		}
@@ -436,7 +396,8 @@ func (fsp *fsProcessor) GetNextAndSend() (retry bool, err error) {
 	}
 
 	includeProps := fsp.job.IncludeProperties == nil || *fsp.job.IncludeProperties
-	for _, snap := range fsp.ActualSnapsToSend() {
+	base := p.base
+	for _, snap := range fsp.ActualSnapsToSend(base) {
 		// Flags must precede the snapshot operand; some ZFS implementations
 		// do not accept POSIX argument permutation.
 		sendArgs := []string{"send", "-v", "-L"}
@@ -446,7 +407,7 @@ func (fsp *fsProcessor) GetNextAndSend() (retry bool, err error) {
 		if fsp.dst.RawSend {
 			sendArgs = append(sendArgs, "-e", "-c", "-w")
 		}
-		sendArgs = append(sendArgs, fsp.getIncrementalParam()...)
+		sendArgs = append(sendArgs, incrementalArgs(base)...)
 		sendArgs = append(sendArgs, snap.Name)
 
 		if err := fsp.setPlaceholdersBefore(snap); err != nil {
@@ -455,7 +416,7 @@ func (fsp *fsProcessor) GetNextAndSend() (retry bool, err error) {
 		if err := fsp.send(sendArgs); err != nil {
 			return false, err
 		}
-		fsp.incremental = snap
+		base = snap
 		if err := fsp.setPlaceholdersAfter(snap); err != nil {
 			return false, err
 		}
@@ -470,7 +431,7 @@ func (fsp *fsProcessor) GetNextAndSend() (retry bool, err error) {
 // resumeSnapshot resolves an untrusted receiver token without transmitting data.
 // OpenZFS -nP reports the actual GUID-resolved target on stdout; the token's
 // embedded toname alone is insufficient because snapshots may have been renamed.
-func (fsp *fsProcessor) resumeSnapshot(sendArgs []string) (source, error) {
+func (fsp *fsProcessor) resumeSnapshot(sendArgs []string, base source) (source, error) {
 	args := append([]string{"send", "-nP"}, sendArgs[1:]...)
 	out, err := zfs.DefaultExecCommand(context.Background(), "zfs", args...).Output()
 	if err != nil {
@@ -496,7 +457,7 @@ func (fsp *fsProcessor) resumeSnapshot(sendArgs []string) (source, error) {
 	// Older matching snapshots remain eligible for resumption even when a newer
 	// snapshot has appeared since interruption. Placeholder targets are eligible
 	// under the same exception used for ordinary incremental sends.
-	allowed := append(fsp.PotentialSnapsToSend(), fsp.ActualSnapsToSend()...)
+	allowed := append(fsp.PotentialSnapsToSend(), fsp.ActualSnapsToSend(base)...)
 	for _, snap := range allowed {
 		if snap.Name == target && zfs.FSName(snap.Name) == fsp.fs {
 			return snap, nil

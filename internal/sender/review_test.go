@@ -13,9 +13,9 @@ import (
 
 func TestPotentialSnapsToSendAnchorsAlternatives(t *testing.T) {
 	fsp := makeFSP("daily|weekly", []source{
-		{Name: "tank@daily-extra", GUID: "1", Srctype: Snapshot},
-		{Name: "tank@extra-weekly", GUID: "2", Srctype: Snapshot},
-		{Name: "tank@weekly", GUID: "3", Srctype: Snapshot},
+		{Name: "tank@daily-extra", GUID: "1"},
+		{Name: "tank@extra-weekly", GUID: "2"},
+		{Name: "tank@weekly", GUID: "3"},
 	})
 	if got := fsp.PotentialSnapsToSend(); len(got) != 1 || got[0].GUID != "3" {
 		t.Fatalf("snapshot_re must match the entire snapshot name: %v", got)

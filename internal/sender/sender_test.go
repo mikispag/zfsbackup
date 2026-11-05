@@ -2,6 +2,7 @@ package sender
 
 import (
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/mikispag/zfsbackup/internal/config"
@@ -76,24 +77,24 @@ func makeFSP(snapshotRe string, sources []source) *fsProcessor {
 
 func TestPotentialSnapsToSend_onlySnapshotsReturned(t *testing.T) {
 	sources := []source{
-		{Name: "tank@daily-2024", GUID: "1", Srctype: Snapshot},
-		{Name: "tank#daily-2024", GUID: "1", Srctype: Bookmark},
+		{Name: "tank@daily-2024", GUID: "1"},
+		{Name: "tank#daily-2024", GUID: "1"},
 	}
 	fsp := makeFSP(".*", sources)
 	got := fsp.PotentialSnapsToSend()
 	if len(got) != 1 {
 		t.Fatalf("expected 1 snapshot, got %d", len(got))
 	}
-	if got[0].Srctype != Snapshot {
-		t.Errorf("expected Snapshot srctype, got %d", got[0].Srctype)
+	if !got[0].isSnapshot() {
+		t.Errorf("expected a snapshot, got %q", got[0].Name)
 	}
 }
 
 func TestPotentialSnapsToSend_regexpFilter(t *testing.T) {
 	sources := []source{
-		{Name: "tank@daily-2024-01-01", GUID: "1", Srctype: Snapshot},
-		{Name: "tank@hourly-2024-01-01", GUID: "2", Srctype: Snapshot},
-		{Name: "tank@daily-2024-01-02", GUID: "3", Srctype: Snapshot},
+		{Name: "tank@daily-2024-01-01", GUID: "1"},
+		{Name: "tank@hourly-2024-01-01", GUID: "2"},
+		{Name: "tank@daily-2024-01-02", GUID: "3"},
 	}
 	fsp := makeFSP("daily-.*", sources)
 	got := fsp.PotentialSnapsToSend()
@@ -109,9 +110,9 @@ func TestPotentialSnapsToSend_regexpFilter(t *testing.T) {
 
 func TestPotentialSnapsToSend_emptyReMatchesAll(t *testing.T) {
 	sources := []source{
-		{Name: "tank@snap1", GUID: "1", Srctype: Snapshot},
-		{Name: "tank@snap2", GUID: "2", Srctype: Snapshot},
-		{Name: "tank@snap3", GUID: "3", Srctype: Snapshot},
+		{Name: "tank@snap1", GUID: "1"},
+		{Name: "tank@snap2", GUID: "2"},
+		{Name: "tank@snap3", GUID: "3"},
 	}
 	// empty SnapshotRegex defaults to ".*"
 	fsp := makeFSP("", sources)
@@ -123,7 +124,7 @@ func TestPotentialSnapsToSend_emptyReMatchesAll(t *testing.T) {
 
 func TestPotentialSnapsToSend_noMatch(t *testing.T) {
 	sources := []source{
-		{Name: "tank@daily-2024", GUID: "1", Srctype: Snapshot},
+		{Name: "tank@daily-2024", GUID: "1"},
 	}
 	fsp := makeFSP("weekly-.*", sources)
 	got := fsp.PotentialSnapsToSend()
@@ -136,9 +137,9 @@ func TestPotentialSnapsToSend_noMatch(t *testing.T) {
 
 func TestBaseFor_prefersSnapshotOverBookmarkWithSameGUID(t *testing.T) {
 	fsp := makeFSP("", []source{
-		{Name: "tank#daily-02-peer", GUID: "2", Srctype: Bookmark},
-		{Name: "tank@daily-02", GUID: "2", Srctype: Snapshot},
-		{Name: "tank@daily-03", GUID: "3", Srctype: Snapshot},
+		{Name: "tank#daily-02-peer", GUID: "2"},
+		{Name: "tank@daily-02", GUID: "2"},
+		{Name: "tank@daily-03", GUID: "3"},
 	})
 	if base, ok := fsp.baseFor("2"); !ok || base.Name != "tank@daily-02" {
 		t.Errorf("baseFor(2) = %v, %v; want the snapshot tank@daily-02", base, ok)
@@ -152,41 +153,20 @@ func TestBaseFor_prefersSnapshotOverBookmarkWithSameGUID(t *testing.T) {
 	}
 }
 
-// --- getIncrementalParam ---
+// --- incrementalArgs ---
 
-func TestGetIncrementalParam_unknownSrctype_returnsNil(t *testing.T) {
-	fsp := &fsProcessor{
-		job:         &config.SenderConfig{},
-		dst:         &config.DestinationConfig{},
-		incremental: source{Srctype: Unknown},
-	}
-	got := fsp.getIncrementalParam()
-	if got != nil {
-		t.Errorf("expected nil for Unknown srctype, got %v", got)
-	}
-}
-
-func TestGetIncrementalParam_snapshotSrctype(t *testing.T) {
-	fsp := &fsProcessor{
-		job:         &config.SenderConfig{},
-		dst:         &config.DestinationConfig{},
-		incremental: source{Name: "tank@snap1", Srctype: Snapshot},
-	}
-	got := fsp.getIncrementalParam()
-	if len(got) != 2 || got[0] != "-i" || got[1] != "tank@snap1" {
-		t.Errorf("expected [\"-i\", \"tank@snap1\"], got %v", got)
-	}
-}
-
-func TestGetIncrementalParam_bookmarkSrctype(t *testing.T) {
-	fsp := &fsProcessor{
-		job:         &config.SenderConfig{},
-		dst:         &config.DestinationConfig{},
-		incremental: source{Name: "tank#bm1", Srctype: Bookmark},
-	}
-	got := fsp.getIncrementalParam()
-	if len(got) != 2 || got[0] != "-i" || got[1] != "tank#bm1" {
-		t.Errorf("expected [\"-i\", \"tank#bm1\"], got %v", got)
+func TestIncrementalArgs(t *testing.T) {
+	for _, tc := range []struct {
+		base source
+		want string
+	}{
+		{source{}, ""},
+		{source{Name: "tank@snap1", GUID: "1"}, "-i tank@snap1"},
+		{source{Name: "tank#bm1", GUID: "1"}, "-i tank#bm1"},
+	} {
+		if got := strings.Join(incrementalArgs(tc.base), " "); got != tc.want {
+			t.Errorf("incrementalArgs(%v) = %q; want %q", tc.base, got, tc.want)
+		}
 	}
 }
 
@@ -203,23 +183,22 @@ func makeConfig(re string, intermediate bool, syncPlaceholders []string) (*confi
 }
 
 // makeActualFSP builds an fsProcessor via NewFSProcessor (which compiles snapRe)
-// then injects sources and incremental base for ActualSnapsToSend tests.
-func makeActualFSP(job *config.SenderConfig, dst *config.DestinationConfig, sources []source, incremental source) *fsProcessor {
+// then injects sources for ActualSnapsToSend tests.
+func makeActualFSP(job *config.SenderConfig, dst *config.DestinationConfig, sources []source) *fsProcessor {
 	fsp := NewFSProcessor("tank", job, dst)
 	fsp.sources = sources
-	fsp.incremental = incremental
 	return fsp
 }
 
 func TestActualSnapsToSend_noIncrementalBase_picksMostRecent(t *testing.T) {
 	sources := []source{
-		{Name: "tank@daily-01", GUID: "1", Srctype: Snapshot},
-		{Name: "tank@daily-02", GUID: "2", Srctype: Snapshot},
-		{Name: "tank@daily-03", GUID: "3", Srctype: Snapshot},
+		{Name: "tank@daily-01", GUID: "1"},
+		{Name: "tank@daily-02", GUID: "2"},
+		{Name: "tank@daily-03", GUID: "3"},
 	}
 	job, dst := makeConfig("daily-.*", false, nil)
-	fsp := makeActualFSP(job, dst, sources, source{Srctype: Unknown})
-	got := fsp.ActualSnapsToSend()
+	fsp := makeActualFSP(job, dst, sources)
+	got := fsp.ActualSnapsToSend(source{})
 	if len(got) != 1 {
 		t.Fatalf("expected 1 snap, got %d: %v", len(got), got)
 	}
@@ -230,37 +209,37 @@ func TestActualSnapsToSend_noIncrementalBase_picksMostRecent(t *testing.T) {
 
 func TestActualSnapsToSend_sendIntermediateSnaps_sendsAll(t *testing.T) {
 	sources := []source{
-		{Name: "tank@daily-01", GUID: "1", Srctype: Snapshot},
-		{Name: "tank@daily-02", GUID: "2", Srctype: Snapshot},
-		{Name: "tank@daily-03", GUID: "3", Srctype: Snapshot},
+		{Name: "tank@daily-01", GUID: "1"},
+		{Name: "tank@daily-02", GUID: "2"},
+		{Name: "tank@daily-03", GUID: "3"},
 	}
 	job, dst := makeConfig("daily-.*", true, nil)
-	fsp := makeActualFSP(job, dst, sources, source{Srctype: Unknown})
-	got := fsp.ActualSnapsToSend()
+	fsp := makeActualFSP(job, dst, sources)
+	got := fsp.ActualSnapsToSend(source{})
 	if len(got) != 3 {
 		t.Errorf("expected 3 snaps with send_intermediate, got %d", len(got))
 	}
 }
 
 func TestActualSnapsToSend_noMatchingSnaps_returnsEmpty(t *testing.T) {
-	sources := []source{{Name: "tank@hourly-01", GUID: "1", Srctype: Snapshot}}
+	sources := []source{{Name: "tank@hourly-01", GUID: "1"}}
 	job, dst := makeConfig("daily-.*", false, nil)
-	fsp := makeActualFSP(job, dst, sources, source{Srctype: Unknown})
-	if got := fsp.ActualSnapsToSend(); len(got) != 0 {
+	fsp := makeActualFSP(job, dst, sources)
+	if got := fsp.ActualSnapsToSend(source{}); len(got) != 0 {
 		t.Errorf("expected 0 snaps for non-matching re, got %d", len(got))
 	}
 }
 
 func TestActualSnapsToSend_withIncrementalBase_skipsAlreadySentSnaps(t *testing.T) {
 	sources := []source{
-		{Name: "tank@daily-01", GUID: "1", Srctype: Snapshot},
-		{Name: "tank@daily-02", GUID: "2", Srctype: Snapshot},
-		{Name: "tank@daily-03", GUID: "3", Srctype: Snapshot},
+		{Name: "tank@daily-01", GUID: "1"},
+		{Name: "tank@daily-02", GUID: "2"},
+		{Name: "tank@daily-03", GUID: "3"},
 	}
-	base := source{Name: "tank@daily-02", GUID: "2", Srctype: Snapshot}
+	base := source{Name: "tank@daily-02", GUID: "2"}
 	job, dst := makeConfig("daily-.*", false, nil)
-	fsp := makeActualFSP(job, dst, sources, base)
-	got := fsp.ActualSnapsToSend()
+	fsp := makeActualFSP(job, dst, sources)
+	got := fsp.ActualSnapsToSend(base)
 	if len(got) != 1 {
 		t.Fatalf("expected 1 snap after incremental base, got %d", len(got))
 	}
@@ -269,16 +248,33 @@ func TestActualSnapsToSend_withIncrementalBase_skipsAlreadySentSnaps(t *testing.
 	}
 }
 
+func TestActualSnapsToSend_bookmarkBase_skipsItsSnapshot(t *testing.T) {
+	// The base is a placeholder bookmark; the snapshot it was created from has
+	// the same GUID and must not be sent again, whichever is listed first.
+	sources := []source{
+		{Name: "tank@daily-01", GUID: "1"},
+		{Name: "tank#daily-02-peer", GUID: "2"},
+		{Name: "tank@daily-02", GUID: "2"},
+		{Name: "tank@daily-03", GUID: "3"},
+	}
+	job, dst := makeConfig("daily-.*", true, nil)
+	fsp := makeActualFSP(job, dst, sources)
+	got := fsp.ActualSnapsToSend(source{Name: "tank#daily-02-peer", GUID: "2"})
+	if len(got) != 1 || got[0].GUID != "3" {
+		t.Fatalf("expected only GUID=3 after a bookmark base, got %v", got)
+	}
+}
+
 func TestActualSnapsToSend_placeholderGUID_includesMandatorySnap(t *testing.T) {
 	sources := []source{
-		{Name: "tank@daily-01", GUID: "1", Srctype: Snapshot},
-		{Name: "tank@daily-02", GUID: "2", Srctype: Snapshot},
-		{Name: "tank@daily-03", GUID: "3", Srctype: Snapshot},
-		{Name: "tank#daily-02-mypeer", GUID: "2", Srctype: Bookmark},
+		{Name: "tank@daily-01", GUID: "1"},
+		{Name: "tank@daily-02", GUID: "2"},
+		{Name: "tank@daily-03", GUID: "3"},
+		{Name: "tank#daily-02-mypeer", GUID: "2"},
 	}
 	job, dst := makeConfig("daily-.*", false, []string{"mypeer"})
-	fsp := makeActualFSP(job, dst, sources, source{Srctype: Unknown})
-	got := fsp.ActualSnapsToSend()
+	fsp := makeActualFSP(job, dst, sources)
+	got := fsp.ActualSnapsToSend(source{})
 	// mandatory should include daily-02 (placeholder) and daily-03 (most recent)
 	guids := make(map[string]bool)
 	for _, s := range got {
@@ -298,14 +294,14 @@ func TestActualSnapsToSend_placeholderNewerThanNewestMatching_preservesOrder(t *
 	// The result must list snapshots in createtxg order — daily-02 before foo-03 —
 	// so each incremental send uses a valid earlier base.
 	sources := []source{
-		{Name: "tank@daily-01", GUID: "1", Srctype: Snapshot},
-		{Name: "tank@daily-02", GUID: "2", Srctype: Snapshot},
-		{Name: "tank@foo-03", GUID: "3", Srctype: Snapshot},
-		{Name: "tank#foo-03-mypeer", GUID: "3", Srctype: Bookmark},
+		{Name: "tank@daily-01", GUID: "1"},
+		{Name: "tank@daily-02", GUID: "2"},
+		{Name: "tank@foo-03", GUID: "3"},
+		{Name: "tank#foo-03-mypeer", GUID: "3"},
 	}
 	job, dst := makeConfig("daily-.*", false, []string{"mypeer"})
-	fsp := makeActualFSP(job, dst, sources, source{Srctype: Unknown})
-	got := fsp.ActualSnapsToSend()
+	fsp := makeActualFSP(job, dst, sources)
+	got := fsp.ActualSnapsToSend(source{})
 	if len(got) != 2 {
 		t.Fatalf("expected 2 snaps, got %d: %v", len(got), got)
 	}
@@ -319,13 +315,13 @@ func TestActualSnapsToSend_placeholderGUIDIsAlsoMostRecent_noDuplicate(t *testin
 	// GUID=2 is both the placeholder target and the most-recent matching snapshot.
 	// It must appear exactly once in the result.
 	sources := []source{
-		{Name: "tank@daily-01", GUID: "1", Srctype: Snapshot},
-		{Name: "tank@daily-02", GUID: "2", Srctype: Snapshot},
-		{Name: "tank#daily-02-mypeer", GUID: "2", Srctype: Bookmark},
+		{Name: "tank@daily-01", GUID: "1"},
+		{Name: "tank@daily-02", GUID: "2"},
+		{Name: "tank#daily-02-mypeer", GUID: "2"},
 	}
 	job, dst := makeConfig("daily-.*", false, []string{"mypeer"})
-	fsp := makeActualFSP(job, dst, sources, source{Srctype: Unknown})
-	got := fsp.ActualSnapsToSend()
+	fsp := makeActualFSP(job, dst, sources)
+	got := fsp.ActualSnapsToSend(source{})
 	count := 0
 	for _, s := range got {
 		if s.GUID == "2" {

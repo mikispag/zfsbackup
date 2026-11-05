@@ -20,9 +20,9 @@ func TestResumeValidatesTargetAndPreservesRawSend(t *testing.T) {
 		}
 		fsp := NewFSProcessor("tank", job, dst)
 		fsp.sources = []source{
-			{Name: "tank@daily", GUID: "1", Srctype: Snapshot},
-			{Name: "tank@private", GUID: "2", Srctype: Snapshot},
-			{Name: "tank#private-peer", GUID: "2", Srctype: Bookmark},
+			{Name: "tank@daily", GUID: "1"},
+			{Name: "tank@private", GUID: "2"},
+			{Name: "tank#private-peer", GUID: "2"},
 		}
 		retry, err := fsp.GetNextAndSend()
 		wantError := os.Getenv("ZFSBACKUP_RESUME_ERROR") == "1"
