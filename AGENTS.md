@@ -231,6 +231,20 @@ make SIGN=0 deb   # Skip signing
 
 The binary is statically linked (`CGO_ENABLED=0`). All runtime dependencies (`zfs`, `zpool`, `mbuffer`, `zstd`) are resolved via PATH at startup.
 
+## Releasing
+
+Releases are cut on demand from `main` with the Release workflow (`.github/workflows/release.yml`):
+
+```sh
+gh workflow run release.yml -f version=v1.2.3                  # publish
+gh workflow run release.yml -f version=v1.3.0-rc.1 -f prerelease=true
+gh workflow run release.yml -f version=v1.2.3 -f dry_run=true  # build and preview notes only
+```
+
+The workflow validates the version (semver with a `v` prefix, tag must not exist), runs the full CI workflow through `workflow_call`, builds reproducible `tar.gz` archives for linux and freebsd on amd64 and arm64 with `-trimpath` and `main.version` set, writes `SHA256SUMS`, attests build provenance, and creates the tag and GitHub release in a separate job that is the only one with `contents: write`. A dry run stops before attesting and publishing and shows the notes in the job summary.
+
+Release notes come from `.github/scripts/release-notes.sh`, which groups commit subjects since the previous tag by Conventional Commits type (stable releases skip pre-release tags; `!` or `BREAKING CHANGE` produce a breaking-changes section). Keep commit subjects in that form: anything else lands under "Other changes". The workflow references CI with GitHub's self-repository syntax (`uses: $/...`); actionlint v1.7.12 does not know that syntax yet and reports a false positive.
+
 ## Testing
 
 ```sh

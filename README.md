@@ -1,6 +1,7 @@
 # 🗄️ zfsbackup
 
 [![CI](https://github.com/mikispag/zfsbackup/actions/workflows/ci.yml/badge.svg)](https://github.com/mikispag/zfsbackup/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/mikispag/zfsbackup?sort=semver)](https://github.com/mikispag/zfsbackup/releases/latest)
 [![Go version](https://img.shields.io/github/go-mod/go-version/mikispag/zfsbackup)](go.mod)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
@@ -86,6 +87,8 @@ Because the incremental base can be a bookmark, the deleter prunes source snapsh
 ## 📥 Installation
 
 Every host needs **OpenZFS 2.3 or newer**: zfsbackup parses the JSON command output [introduced in OpenZFS 2.3](https://github.com/openzfs/zfs/releases/tag/zfs-2.3.0). Install `zstd` on both ends for compressed transfers, and `mbuffer` for buffering.
+
+**Pre-built binaries:** every [release](https://github.com/mikispag/zfsbackup/releases/latest) ships static binaries for Linux and FreeBSD on x86-64 and ARM64, together with its changelog, install commands, and a `SHA256SUMS` file. Each archive carries a build provenance attestation that you can check with `gh attestation verify <archive> --repo mikispag/zfsbackup`. The Linux binaries run through the integration tests in CI; the FreeBSD binaries are built from the same code but not tested there.
 
 With Go 1.27 or newer:
 
