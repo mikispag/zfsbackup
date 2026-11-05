@@ -289,9 +289,6 @@ In `encoding/json/v2`, `omitempty` omits a field only when its *JSON* encoding i
 **Pitfall: adding regex compilation inside a per-snapshot loop**
 `getValidatedSnaps` in the deleter is called for every filesystem on every run and iterates all snapshots. Compiling regexps inside this loop is O(snapshots × patterns). Regexps are compiled once in `newDeleteFsProcessor` and stored in `dfp.regexps`.
 
-**Pitfall: assuming `source` struct is not comparable**
-`source` (Name, GUID, Srctype) uses only `string` and `int` fields and is safely usable as a map key. The `seen map[source]bool` in `ActualSnapsToSend` relies on this.
-
 **Pitfall: Receiver config is optional but other modules' configs are required**
 All modules except Receiver check for their section in the config and call Fatal if absent. The Receiver guards its config load with `if *configFile != ""` because it can run with defaults (when `--base_dataset` is passed directly).
 

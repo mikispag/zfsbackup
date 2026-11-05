@@ -164,7 +164,8 @@ type SenderConfig struct {
 	// Exclude overrides the top-level Config.Exclude for this module only.
 	Exclude []string `json:"exclude,omitempty"`
 
-	// Name is a human-readable label for this backup job, used in log output.
+	// Name is an optional human-readable label for this backup job. It is
+	// informational only: zfsbackup accepts it but does not use it.
 	Name string `json:"name,omitempty"`
 
 	// SnapshotRegex is a regular expression matched against the snapshot name
@@ -281,7 +282,7 @@ type ReceiverConfig struct {
 	EnforceLocalProperties []string `json:"enforce_local_properties,omitempty"`
 
 	// MbufferArgs lists arguments forwarded to mbuffer on the receiver side.
-	// Same element format as SenderConfig.MbufferArgs. Defaults to
+	// Same element format as DestinationConfig.MbufferArgs. Defaults to
 	// "-P 90 -m 3%" if unset and mbuffer is installed.
 	MbufferArgs []string `json:"mbuffer_args,omitempty"`
 

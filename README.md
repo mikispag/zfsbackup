@@ -309,7 +309,7 @@ For a local backup to another pool:
 | `send_intermediate` | 📋 Send every matching snapshot in order (default: only the newest) |
 | `include_properties` | 📦 Include ZFS properties in the stream (default: `true`) |
 | `resumable` | ♻️ Use resumable transfers (default: `true`; must match the receiver's `resumable`) |
-| `name` | 🏷️ Label for this job in log output |
+| `name` | 🏷️ Optional descriptive label for the job; informational only |
 | `include` / `exclude` | Override the top-level filesystem lists |
 
 **Destination options** (inside each `destinations` entry):
