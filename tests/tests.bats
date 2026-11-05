@@ -127,6 +127,26 @@ cat >$TEST_TMP_DIR/sender_raw.json <<EOF
 }
 EOF
 
+# Sender with zstd configured for a non-raw send. Encrypted datasets must
+# skip in-transit zstd and use zfs send -c; OpenZFS refuses -p for non-raw
+# sends of encrypted datasets, so properties are disabled.
+cat >$TEST_TMP_DIR/sender_encrypted_nonraw.json <<EOF
+{
+  "include": ["$TESTFS/sender"],
+  "exclude": ["$TESTFS/sender/excluded"],
+  "sender": {
+    "snapshot_re": "snap_remote.*",
+    "include_properties": false,
+    "destinations": [
+      {
+        "receiver": "ssh -F $SSH_TEST_PATH/ssh_config -- test_target",
+        "compression": "zstd"
+      }
+    ]
+  }
+}
+EOF
+
 # Sender that sets a named placeholder bookmark after each send.
 cat >$TEST_TMP_DIR/sender_ph_one.json <<EOF
 {
@@ -549,6 +569,18 @@ EOM
   assert_output --partial <<EOM
 $RECEIVERFS/mypool/myencryptedds  keystatus             unavailable
 EOM
+}
+
+@test "EncryptedNonRawSendUsesNativeCompression" {
+  echo 12345678|zfs create -p -o canmount=off -o compression=lz4 -o encryption=on -o keyformat=passphrase -o keylocation=prompt $TESTFS/sender/mypool/myencryptedds
+  zfs snapshot $TESTFS/sender/mypool/myencryptedds@snap_remote1
+  run $TEST_TMP_DIR/zfsbackup sender --debug --config=$TEST_TMP_DIR/sender_encrypted_nonraw.json
+  assert_success
+  assert_output --partial "send -v -L -c $TESTFS/sender/mypool/myencryptedds@snap_remote1"
+  assert_output --partial "--compression=none"
+  refute_output --partial "--compression=zstd"
+  run zfs list -t snapshot -r $TESTFS/receiver -o name -H
+  assert_output "$RECEIVERFS/mypool/myencryptedds@snap_remote1"
 }
 
 @test "SendSetPlaceholders" {

@@ -113,8 +113,11 @@ type DestinationConfig struct {
 
 	// Compression is the in-transit compression algorithm: "none" (default) or
 	// "zstd". Applied on the sender side after the ZFS send stream is produced
-	// and removed on the receiver side before zfs receive consumes it. Sender
-	// and receiver must agree; a mismatch corrupts the stream.
+	// and removed on the receiver side before zfs receive consumes it; the
+	// sender tells the receiver which decompressor to use. Ignored for natively
+	// encrypted source datasets, which rely on zfs send's own compression: a
+	// raw stream already carries compressed ciphertext, and non-raw sends of
+	// encrypted datasets use zfs send -c.
 	Compression string `json:"compression,omitempty"`
 
 	// CompressionLevel overrides the compressor's built-in default level. Only

@@ -156,7 +156,6 @@ All source-side modules read one JSON file. The receiver has its own, smaller fi
       },
       {
         "receiver": "ssh backup@offsite -- ",
-        "compression": "zstd",
         "raw_send": true,
         "placeholders": ["offsite"]
       }
@@ -320,11 +319,13 @@ For a local backup to another pool:
 |---|---|
 | `receiver` | 🔌 Command that invokes the receiver |
 | `raw_send` | 🔐 Use `zfs send -ecw`: the receiver stores ciphertext and never sees the encryption key |
-| `compression` | ⚡ `"zstd"` compresses the stream in transit (default `"none"`); the sender tells the receiver how to decompress, and both hosts need `zstd` |
+| `compression` | ⚡ `"zstd"` compresses the stream in transit (default `"none"`); the sender tells the receiver how to decompress, and both hosts need `zstd`. Skipped for encrypted datasets (see below) |
 | `compression_level` | 🎚️ Override the compressor's default level |
 | `mbuffer_args` | 🔄 Arguments for [mbuffer](https://www.maier-komor.de/mbuffer.html) on the sending side; defaults to `-p 90 -m 3%` when mbuffer is installed |
 | `placeholders` | 🔖 Override the auto-derived placeholder bookmark suffix |
 | `sync_placeholders` | 🔗 Mirror these placeholder bookmarks to this receiver |
+
+**Encrypted datasets** never use in-transit compression, whatever `compression` says: zfs send compresses them better and for free. With `raw_send`, the stream already carries the compressed ciphertext exactly as stored on disk, which zstd cannot shrink; without it, the sender adds `zfs send -c` so blocks travel compressed as they are on disk. Prefer `raw_send` for encrypted datasets: OpenZFS refuses to include properties in a non-raw send of an encrypted dataset, so a non-raw destination also needs `include_properties: false`, and the sending host must have the key loaded.
 
 > [!NOTE]
 > Placeholder bookmarks are automatic. After every successful send, the sender creates a bookmark named `#<snapshot>-dst<hash>` on the source for each destination, where the hash is derived from `receiver`. No configuration is needed.

@@ -46,6 +46,9 @@ type fsProcessor struct {
 	dst     *config.DestinationConfig
 	snapRe  *regexp.Regexp // compiled from job.SnapshotRegex in NewFSProcessor
 	sources []source       // snapshots and bookmarks in createtxg order
+	// encrypted marks a natively encrypted filesystem: its streams rely on
+	// zfs send's own compression instead of in-transit compression.
+	encrypted bool
 }
 
 func (fsp *fsProcessor) PotentialSnapsToSend() []source {
@@ -253,6 +256,17 @@ func compressionType(dst *config.DestinationConfig) string {
 	return dst.Compression
 }
 
+// streamCompression returns the in-transit compression for this filesystem.
+// Encrypted filesystems never use one: a raw send (-w) already carries the
+// compressed ciphertext as stored on disk, which zstd cannot shrink, and a
+// non-raw send uses zfs send -c to keep blocks compressed as on disk.
+func (fsp *fsProcessor) streamCompression() string {
+	if fsp.encrypted {
+		return "none"
+	}
+	return compressionType(fsp.dst)
+}
+
 func (fsp *fsProcessor) send(zfsArgs []string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -281,7 +295,7 @@ func (fsp *fsProcessor) send(zfsArgs []string) error {
 	if bufferCmd != nil {
 		started = append(started, bufferCmd)
 	}
-	ct := compressionType(fsp.dst)
+	ct := fsp.streamCompression()
 	reader, comprCmd, err := zfs.MaybeCompress(ctx, ct, fsp.dst.CompressionLevel, bufferedReader)
 	if err != nil {
 		return err
@@ -344,6 +358,14 @@ func (fsp *fsProcessor) ProcessFs() error {
 	if len(fsp.ActualSnapsToSend(source{})) == 0 {
 		return fsp.sendPlaceholders()
 	}
+	encrypted, err := zfs.IsEncrypted(fsp.fs)
+	if err != nil {
+		return err
+	}
+	fsp.encrypted = encrypted
+	if encrypted && compressionType(fsp.dst) != "none" {
+		slog.Debug("encrypted filesystem: using zfs send compression instead of in-transit compression", "fs", fsp.fs)
+	}
 	retriesLeft := 20
 	for {
 		retry, err := fsp.GetNextAndSend()
@@ -404,8 +426,11 @@ func (fsp *fsProcessor) GetNextAndSend() (retry bool, err error) {
 		if includeProps {
 			sendArgs = append(sendArgs, "-p")
 		}
-		if fsp.dst.RawSend {
+		switch {
+		case fsp.dst.RawSend:
 			sendArgs = append(sendArgs, "-e", "-c", "-w")
+		case fsp.encrypted:
+			sendArgs = append(sendArgs, "-c")
 		}
 		sendArgs = append(sendArgs, incrementalArgs(base)...)
 		sendArgs = append(sendArgs, snap.Name)

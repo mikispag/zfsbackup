@@ -131,12 +131,12 @@ func incrementalSuggestion(baseds, ds string, cfg *config.ReceiverConfig) error 
 }
 
 func createNotIfEncrypted(fs string, disableMount bool) error {
-	val, err := zfs.ZfsGet(path.Dir(fs), "encryption")
+	encrypted, err := zfs.IsEncrypted(path.Dir(fs))
 	if err != nil {
-		return fmt.Errorf("cannot determine encryption of %s: %w", path.Dir(fs), err)
+		return err
 	}
-	if strings.TrimSpace(val) != "off" {
-		return fmt.Errorf("filesystem %s is encrypted (encryption=%s): refusing to create an unencrypted child", path.Dir(fs), strings.TrimSpace(val))
+	if encrypted {
+		return fmt.Errorf("filesystem %s is encrypted: refusing to create an unencrypted child", path.Dir(fs))
 	}
 	return zfs.ZfsCreate(fs, disableMount)
 }

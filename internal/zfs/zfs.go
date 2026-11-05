@@ -68,6 +68,23 @@ func ZfsGet(fs, prop string) (string, error) {
 	return string(b), err
 }
 
+// IsEncrypted reports whether fs uses native ZFS encryption, i.e. whether its
+// encryption property is anything other than "off".
+func IsEncrypted(fs string) (bool, error) {
+	val, err := ZfsGet(fs, "encryption")
+	if err != nil {
+		return false, fmt.Errorf("cannot determine encryption of %s: %w", fs, err)
+	}
+	switch strings.TrimSpace(val) {
+	case "off":
+		return false, nil
+	case "":
+		return false, fmt.Errorf("cannot determine encryption of %s: empty property value", fs)
+	default:
+		return true, nil
+	}
+}
+
 // ZfsDestroy destroys a ZFS dataset or snapshot.
 // Additional flags (e.g. "-r", "-d", "-v") may be passed via flags.
 func ZfsDestroy(target string, flags ...string) error {

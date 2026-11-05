@@ -63,6 +63,17 @@ func TestCompressionType_none_returnsNone(t *testing.T) {
 	}
 }
 
+func TestStreamCompression_encryptedSkipsInTransitCompression(t *testing.T) {
+	fsp := &fsProcessor{dst: &config.DestinationConfig{Compression: "zstd"}}
+	if got := fsp.streamCompression(); got != "zstd" {
+		t.Errorf("unencrypted: got %q; want zstd", got)
+	}
+	fsp.encrypted = true
+	if got := fsp.streamCompression(); got != "none" {
+		t.Errorf("encrypted: got %q; want none", got)
+	}
+}
+
 // --- PotentialSnapsToSend ---
 
 func makeFSP(snapshotRe string, sources []source) *fsProcessor {

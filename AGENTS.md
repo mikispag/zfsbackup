@@ -116,7 +116,7 @@ For each included filesystem, the sender:
 1. Calls the receiver with `--op=incremental_suggestions` to learn the current state of the destination (last snapshot GUID, resume token, or "send full").
 2. Selects snapshots to send: by default, only the most recent matching snapshot; with `send_intermediate: true`, all snapshots in order.
 3. Before sending: creates `#<snap>-before-<placeholder>` bookmarks for `placeholders`.
-4. Pipes `zfs send` output through optional mbuffer and zstd compression to the receiver.
+4. Pipes `zfs send` output through optional mbuffer and zstd compression to the receiver. Natively encrypted source datasets (`zfs.IsEncrypted`) never use in-transit zstd: raw sends (`-ecw`) already carry compressed ciphertext and non-raw sends add `-c` (`streamCompression`). OpenZFS rejects `-p` for non-raw sends of encrypted datasets, so those need `include_properties: false`.
 5. After sending: creates/updates `#<snap>-<placeholder>` bookmarks, garbage-collects stale ones.
 6. Optionally syncs placeholder bookmarks to the receiver (`sync_placeholders`).
 

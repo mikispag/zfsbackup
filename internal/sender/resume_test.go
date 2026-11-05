@@ -120,6 +120,7 @@ list) case " $* " in
 *' -t bookmark '*) printf '%s' '{"datasets":{"tank#manual-peer":{"properties":{"guid":{"value":"1"},"createtxg":{"value":"10"}}}}}';;
 *) printf '%s' '{"datasets":{"tank@manual":{"properties":{"guid":{"value":"1"},"createtxg":{"value":"10"}}},"tank#manual-peer":{"properties":{"guid":{"value":"1"},"createtxg":{"value":"10"}}}}}';;
 esac;;
+get) echo off;;
 send) printf stream;;
 esac
 `
@@ -141,5 +142,67 @@ esac
 		"ZFSBACKUP_MANDATORY_SENT="+filepath.Join(dir, "sent"), "PATH="+dir+":"+os.Getenv("PATH"))
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("mandatory send failed: %v\n%s", err, out)
+	}
+}
+
+func TestEncryptedDatasetsUseNativeCompression(t *testing.T) {
+	if os.Getenv("ZFSBACKUP_ENCRYPTION_TEST") == "1" {
+		fsp := NewFSProcessor("tank", &config.SenderConfig{SnapshotRegex: "daily"},
+			&config.DestinationConfig{Receiver: os.Getenv("ZFSBACKUP_ENCRYPTION_RECEIVER"), Compression: "zstd"})
+		if err := fsp.ProcessFs(); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	for _, tc := range []struct {
+		encryption      string
+		wantCompression string
+		wantNativeFlag  bool
+	}{
+		{"aes-256-gcm", "--compression=none", true},
+		{"off", "--compression=zstd", false},
+	} {
+		t.Run(tc.encryption, func(t *testing.T) {
+			dir := t.TempDir()
+			scripts := map[string]string{
+				"zfs": `case "$1" in
+list) printf '%s' '{"datasets":{"tank@daily":{"properties":{"guid":{"value":"1"},"createtxg":{"value":"10"}}}}}';;
+get) echo "$ZFSBACKUP_ENCRYPTION";;
+send) printf '%s\n' "$*" >> "$ZFSBACKUP_ENCRYPTION_DIR/sends"; printf stream;;
+esac`,
+				"zstd": "exec cat",
+				"receiver": `case "$1" in
+--op=incremental_suggestions) printf '%s' '{"send_full":true}';;
+--op=receive) printf '%s\n' "$*" >> "$ZFSBACKUP_ENCRYPTION_DIR/receives"; cat >/dev/null;;
+*) exit 1;;
+esac`,
+			}
+			for name, script := range scripts {
+				if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\n"+script+"\n"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cmd := exec.Command(os.Args[0], "-test.run=^TestEncryptedDatasetsUseNativeCompression$")
+			cmd.Env = append(os.Environ(), "ZFSBACKUP_ENCRYPTION_TEST=1", "ZFSBACKUP_ENCRYPTION="+tc.encryption,
+				"ZFSBACKUP_ENCRYPTION_DIR="+dir, "ZFSBACKUP_ENCRYPTION_RECEIVER="+filepath.Join(dir, "receiver"),
+				"PATH="+dir+":"+os.Getenv("PATH"))
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("send failed: %v\n%s", err, out)
+			}
+			sends, err := os.ReadFile(filepath.Join(dir, "sends"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			receives, err := os.ReadFile(filepath.Join(dir, "receives"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.Contains(" "+string(sends), " -c "); got != tc.wantNativeFlag {
+				t.Errorf("zfs send %q: -c present = %v; want %v", sends, got, tc.wantNativeFlag)
+			}
+			if !strings.Contains(string(receives), tc.wantCompression) {
+				t.Errorf("receiver args %q; want %s", receives, tc.wantCompression)
+			}
+		})
 	}
 }

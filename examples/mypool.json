@@ -18,7 +18,6 @@
       },
       {
         "receiver": "ssh backup@offsite-host -- ",
-        "compression": "zstd",
         "raw_send": true,
         "placeholders": ["offsite"]
       }
