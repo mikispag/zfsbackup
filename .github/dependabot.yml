@@ -12,3 +12,15 @@ updates:
           - "*"
     commit-message:
       prefix: chore
+  # bats-core and its helpers are submodules under tests/libs. They track
+  # their default branches, so check monthly to keep the noise down.
+  - package-ecosystem: gitsubmodule
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      bats:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: chore

@@ -448,7 +448,7 @@ make integration-tests   # bats suite against a real, delegated ZFS filesystem
 make tests               # both
 ```
 
-The integration tests need a delegated ZFS filesystem, [bats-core](https://github.com/bats-core/bats-core), and the bats helper submodules:
+The integration tests need a delegated ZFS filesystem and the submodules under `tests/libs`, which pin [bats-core](https://github.com/bats-core/bats-core) and its helpers; `make integration-tests` runs that pinned bats rather than any system copy:
 
 ```sh
 git submodule update --init --recursive

@@ -45,7 +45,7 @@ unit-tests:
 	go test -count=1 ./...
 
 integration-tests:
-	bats tests/tests.bats
+	tests/libs/bats/bin/bats tests/tests.bats
 
 clean:
 	rm -f $(BINARY) *.deb *.pkg.tar.zst *.pkg.tar.zst.sig *.deb.sig

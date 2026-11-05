@@ -248,11 +248,11 @@ Release notes come from `.github/scripts/release-notes.sh`, which groups commit 
 
 ```sh
 make unit-tests         # go vet ./... && go test ./...
-make integration-tests  # bats tests/tests.bats (requires a delegated ZFS filesystem)
+make integration-tests  # tests/libs/bats/bin/bats tests/tests.bats (requires a delegated ZFS filesystem)
 make tests              # both
 ```
 
-CI (`.github/workflows/ci.yml`) additionally gates on `go mod tidy -diff`, staticcheck and govulncheck at pinned versions, and runs the bats suite against OpenZFS 2.4.4 built from a checksum-verified tarball. Before pushing, run the same pinned tools locally, e.g. `go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...` and `go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...`. When bumping OpenZFS, update `ZFS_VERSION` and `ZFS_SHA256` together.
+CI (`.github/workflows/ci.yml`) additionally gates on `go mod tidy -diff`, staticcheck and govulncheck at pinned versions, and runs the bats suite against OpenZFS 2.4.4 built from a checksum-verified tarball. Before pushing, run the same pinned tools locally, e.g. `go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...` and `go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...`. When bumping OpenZFS, update `ZFS_VERSION` and `ZFS_SHA256` together. bats-core, bats-support and bats-assert are git submodules under `tests/libs` (CI checks them out recursively and runs the pinned bats, not a distro package); Dependabot updates them monthly and the GitHub Actions weekly.
 
 **Unit tests** cover:
 
