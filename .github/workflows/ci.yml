@@ -5,15 +5,32 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+  workflow_call:
+
+permissions: {}
+
+concurrency:
+  # github.workflow is the caller's name under workflow_call, so a release
+  # run never shares (or cancels) a group with push or pull request runs.
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build-and-test:
+    name: Lint, unit tests and build
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          check-latest: true
       - name: gofmt
         run: |
           unformatted=$(gofmt -l .)
@@ -22,20 +39,38 @@ jobs:
             echo "$unformatted" >&2
             exit 1
           fi
-      - run: go vet ./...
-      - run: go test -race -count=1 ./...
-      - run: CGO_ENABLED=0 go build ./cmd/zfsbackup
+      - name: go mod tidy
+        run: go mod tidy -diff
+      - name: go vet
+        run: go vet ./...
+      - name: staticcheck
+        run: go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+      - name: Unit tests
+        run: go test -race -count=1 ./...
+      - name: Build static binary
+        run: CGO_ENABLED=0 go build -trimpath ./cmd/zfsbackup
 
   integration-tests:
+    name: Integration tests
     runs-on: ubuntu-latest
     needs: build-and-test
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      ZFS_VERSION: "2.4.4"
+      ZFS_SHA256: 2a3c70d55a37cc71618a95a60e81ad66530201eb118d37741dc92efcf848c8b1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: recursive
+          persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          check-latest: true
       - name: Install build deps and test helpers
         run: |
           sudo apt-get update
@@ -46,12 +81,12 @@ jobs:
             python3 python3-dev python3-setuptools python3-cffi \
             libffi-dev python3-packaging libcurl4-openssl-dev libpam0g-dev \
             bats mbuffer zstd gettext-base openssh-server
-      - name: Build and install OpenZFS 2.4.2
+      - name: Build and install OpenZFS
         run: |
           set -euo pipefail
-          ZFS_VERSION=2.4.2
-          curl -fsSL -o /tmp/zfs.tar.gz \
+          curl -fsSL --retry 5 --retry-all-errors -o /tmp/zfs.tar.gz \
             "https://github.com/openzfs/zfs/releases/download/zfs-${ZFS_VERSION}/zfs-${ZFS_VERSION}.tar.gz"
+          echo "${ZFS_SHA256}  /tmp/zfs.tar.gz" | sha256sum --check --strict
           mkdir -p /tmp/zfs-src
           tar -xzf /tmp/zfs.tar.gz -C /tmp/zfs-src --strip-components=1
           cd /tmp/zfs-src
@@ -76,5 +111,4 @@ jobs:
       - name: Run integration tests
         env:
           DELEGATED_FS: testpool/zfsbackuptestsuite
-        run: |
-          make integration-tests
+        run: make integration-tests
