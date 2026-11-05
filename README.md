@@ -309,7 +309,7 @@ For a local backup to another pool:
 |---|---|
 | `snapshot_re` | 🔍 Only snapshot names matching this regex are sent. Strongly recommended |
 | `send_intermediate` | 📋 Send every matching snapshot in order (default: only the newest) |
-| `include_properties` | 📦 Include ZFS properties in the stream (default: `true`) |
+| `include_properties` | 📦 Include ZFS properties in the stream (default: `true`); always left out of non-raw sends of encrypted datasets |
 | `name` | 🏷️ Label for this job, logged when the sender starts |
 | `include` / `exclude` | Override the top-level filesystem lists |
 
@@ -325,7 +325,7 @@ For a local backup to another pool:
 | `placeholders` | 🔖 Override the auto-derived placeholder bookmark suffix |
 | `sync_placeholders` | 🔗 Mirror these placeholder bookmarks to this receiver |
 
-**Encrypted datasets** never use in-transit compression, whatever `compression` says: zfs send compresses them better and for free. With `raw_send`, the stream already carries the compressed ciphertext exactly as stored on disk, which zstd cannot shrink; without it, the sender adds `zfs send -c` so blocks travel compressed as they are on disk. Prefer `raw_send` for encrypted datasets: OpenZFS refuses to include properties in a non-raw send of an encrypted dataset, so a non-raw destination also needs `include_properties: false`, and the sending host must have the key loaded.
+**Encrypted datasets** never use in-transit compression, whatever `compression` says: zfs send compresses them better and for free. With `raw_send`, the stream already carries the compressed ciphertext exactly as stored on disk, which zstd cannot shrink; without it, the sender adds `zfs send -c` so blocks travel compressed as they are on disk. Prefer `raw_send` for encrypted datasets. A non-raw send needs the key loaded on the sending host and cannot carry properties: OpenZFS refuses `zfs send -p` for it, so the sender leaves properties out of those streams and logs a warning (set `include_properties: false` to silence it).
 
 > [!NOTE]
 > Placeholder bookmarks are automatic. After every successful send, the sender creates a bookmark named `#<snapshot>-dst<hash>` on the source for each destination, where the hash is derived from `receiver`. No configuration is needed.

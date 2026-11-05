@@ -74,6 +74,35 @@ func TestStreamCompression_encryptedSkipsInTransitCompression(t *testing.T) {
 	}
 }
 
+func TestIncludeProperties_droppedOnlyForNonRawEncryptedSends(t *testing.T) {
+	off := false
+	for _, tc := range []struct {
+		name      string
+		requested *bool
+		encrypted bool
+		raw       bool
+		want      bool
+	}{
+		{"default", nil, false, false, true},
+		{"disabled", &off, false, false, false},
+		{"encrypted raw", nil, true, true, true},
+		{"encrypted non-raw", nil, true, false, false},
+		{"encrypted non-raw disabled", &off, true, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fsp := &fsProcessor{
+				fs:        "tank",
+				job:       &config.SenderConfig{IncludeProperties: tc.requested},
+				dst:       &config.DestinationConfig{RawSend: tc.raw},
+				encrypted: tc.encrypted,
+			}
+			if got := fsp.includeProperties(); got != tc.want {
+				t.Errorf("includeProperties() = %v; want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 // --- PotentialSnapsToSend ---
 
 func makeFSP(snapshotRe string, sources []source) *fsProcessor {

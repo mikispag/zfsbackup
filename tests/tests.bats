@@ -127,16 +127,15 @@ cat >$TEST_TMP_DIR/sender_raw.json <<EOF
 }
 EOF
 
-# Sender with zstd configured for a non-raw send. Encrypted datasets must
-# skip in-transit zstd and use zfs send -c; OpenZFS refuses -p for non-raw
-# sends of encrypted datasets, so properties are disabled.
+# Sender with zstd and the default include_properties for a non-raw send.
+# Encrypted datasets must skip in-transit zstd and use zfs send -c, and must
+# leave out -p, which OpenZFS refuses in non-raw sends of encrypted datasets.
 cat >$TEST_TMP_DIR/sender_encrypted_nonraw.json <<EOF
 {
   "include": ["$TESTFS/sender"],
   "exclude": ["$TESTFS/sender/excluded"],
   "sender": {
     "snapshot_re": "snap_remote.*",
-    "include_properties": false,
     "destinations": [
       {
         "receiver": "ssh -F $SSH_TEST_PATH/ssh_config -- test_target",
@@ -577,6 +576,7 @@ EOM
   run $TEST_TMP_DIR/zfsbackup sender --debug --config=$TEST_TMP_DIR/sender_encrypted_nonraw.json
   assert_success
   assert_output --partial "send -v -L -c $TESTFS/sender/mypool/myencryptedds@snap_remote1"
+  assert_output --partial "sending encrypted filesystem without properties"
   assert_output --partial "--compression=none"
   refute_output --partial "--compression=zstd"
   run zfs list -t snapshot -r $TESTFS/receiver -o name -H

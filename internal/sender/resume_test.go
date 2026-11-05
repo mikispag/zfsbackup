@@ -148,21 +148,26 @@ esac
 func TestEncryptedDatasetsUseNativeCompression(t *testing.T) {
 	if os.Getenv("ZFSBACKUP_ENCRYPTION_TEST") == "1" {
 		fsp := NewFSProcessor("tank", &config.SenderConfig{SnapshotRegex: "daily"},
-			&config.DestinationConfig{Receiver: os.Getenv("ZFSBACKUP_ENCRYPTION_RECEIVER"), Compression: "zstd"})
+			&config.DestinationConfig{Receiver: os.Getenv("ZFSBACKUP_ENCRYPTION_RECEIVER"), Compression: "zstd",
+				RawSend: os.Getenv("ZFSBACKUP_ENCRYPTION_RAW") == "1"})
 		if err := fsp.ProcessFs(); err != nil {
 			t.Fatal(err)
 		}
 		return
 	}
 	for _, tc := range []struct {
+		name            string
 		encryption      string
+		raw             string
 		wantCompression string
 		wantNativeFlag  bool
+		wantProperties  bool
 	}{
-		{"aes-256-gcm", "--compression=none", true},
-		{"off", "--compression=zstd", false},
+		{"encrypted", "aes-256-gcm", "0", "--compression=none", true, false},
+		{"encrypted raw", "aes-256-gcm", "1", "--compression=none", true, true},
+		{"unencrypted", "off", "0", "--compression=zstd", false, true},
 	} {
-		t.Run(tc.encryption, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			scripts := map[string]string{
 				"zfs": `case "$1" in
@@ -183,7 +188,7 @@ esac`,
 				}
 			}
 			cmd := exec.Command(os.Args[0], "-test.run=^TestEncryptedDatasetsUseNativeCompression$")
-			cmd.Env = append(os.Environ(), "ZFSBACKUP_ENCRYPTION_TEST=1", "ZFSBACKUP_ENCRYPTION="+tc.encryption,
+			cmd.Env = append(os.Environ(), "ZFSBACKUP_ENCRYPTION_TEST=1", "ZFSBACKUP_ENCRYPTION="+tc.encryption, "ZFSBACKUP_ENCRYPTION_RAW="+tc.raw,
 				"ZFSBACKUP_ENCRYPTION_DIR="+dir, "ZFSBACKUP_ENCRYPTION_RECEIVER="+filepath.Join(dir, "receiver"),
 				"PATH="+dir+":"+os.Getenv("PATH"))
 			if out, err := cmd.CombinedOutput(); err != nil {
@@ -199,6 +204,9 @@ esac`,
 			}
 			if got := strings.Contains(" "+string(sends), " -c "); got != tc.wantNativeFlag {
 				t.Errorf("zfs send %q: -c present = %v; want %v", sends, got, tc.wantNativeFlag)
+			}
+			if got := strings.Contains(" "+string(sends), " -p "); got != tc.wantProperties {
+				t.Errorf("zfs send %q: -p present = %v; want %v", sends, got, tc.wantProperties)
 			}
 			if !strings.Contains(string(receives), tc.wantCompression) {
 				t.Errorf("receiver args %q; want %s", receives, tc.wantCompression)

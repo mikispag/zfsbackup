@@ -187,6 +187,8 @@ type SenderConfig struct {
 
 	// IncludeProperties includes ZFS property data in the stream (zfs send -p)
 	// so each destination inherits source properties. Defaults to true if nil.
+	// Non-raw sends of encrypted datasets never include properties: OpenZFS
+	// refuses -p for them, so the sender leaves it out and logs a warning.
 	IncludeProperties *bool `json:"include_properties,omitempty"`
 
 	// Resumable is deprecated and ignored: the sender always resumes an

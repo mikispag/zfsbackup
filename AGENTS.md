@@ -116,7 +116,7 @@ For each included filesystem, the sender:
 1. Calls the receiver with `--op=incremental_suggestions` to learn the current state of the destination (last snapshot GUID, resume token, or "send full").
 2. Selects snapshots to send: by default, only the most recent matching snapshot; with `send_intermediate: true`, all snapshots in order.
 3. Before sending: creates `#<snap>-before-<placeholder>` bookmarks for `placeholders`.
-4. Pipes `zfs send` output through optional mbuffer and zstd compression to the receiver. Natively encrypted source datasets (`zfs.IsEncrypted`) never use in-transit zstd: raw sends (`-ecw`) already carry compressed ciphertext and non-raw sends add `-c` (`streamCompression`). OpenZFS rejects `-p` for non-raw sends of encrypted datasets, so those need `include_properties: false`.
+4. Pipes `zfs send` output through optional mbuffer and zstd compression to the receiver. Natively encrypted source datasets (`zfs.IsEncrypted`) never use in-transit zstd: raw sends (`-ecw`) already carry compressed ciphertext and non-raw sends add `-c` (`streamCompression`). OpenZFS rejects `-p` for non-raw sends of encrypted datasets, so `includeProperties` leaves it out of those sends with a warning instead of failing.
 5. After sending: creates/updates `#<snap>-<placeholder>` bookmarks, garbage-collects stale ones.
 6. Optionally syncs placeholder bookmarks to the receiver (`sync_placeholders`).
 
@@ -260,7 +260,7 @@ CI (`.github/workflows/ci.yml`) additionally gates on `go mod tidy -diff`, stati
 |---|---|
 | `internal/config` | `ResolveInclude`/`ResolveExclude`; full JSON round-trip of all wire types (`IncrementalSuggestions`, `SetPlaceholders`, `PlaceholderEntry`) including `omitempty` and exact field name checks |
 | `internal/zfs` | `ParseDuration` (valid, invalid, ParseInt overflow); `IsValidZFSDataset` (valid names, invalid names, `.`/`..` components); `ParseTabular` (success, empty output, command fails); `Group`/`NewGroup`/`Go`/`Wait` (success, error propagation, context cancellation, first-error-wins) |
-| `internal/sender` | `autoPlaceholderName` (stability, whitespace normalization, no hyphens, distinct names); `compressionType` (empty→"none", explicit value); `PotentialSnapsToSend`; `ActualSnapsToSend` (no base, intermediate, placeholder-driven mandatory, bookmark base); `baseFor` (snapshot preferred over a bookmark with the same GUID); `incrementalArgs` |
+| `internal/sender` | `autoPlaceholderName` (stability, whitespace normalization, no hyphens, distinct names); `compressionType` (empty→"none", explicit value); `PotentialSnapsToSend`; `ActualSnapsToSend` (no base, intermediate, placeholder-driven mandatory, bookmark base); `baseFor` (snapshot preferred over a bookmark with the same GUID); `incrementalArgs`; `includeProperties` (dropped only for non-raw sends of encrypted datasets) |
 | `internal/deleter` | `preserveTopN`; `preserveNewerThan`; `markForPreservation` (interval rules, holes, snap outside window, large-interval bias capping); `newPolicy` (invalid durations, counts and `preserve_top_n`); `newDeleteFsProcessor` (valid/invalid regexp); `deleteManySnaps` (nil/empty list) |
 | `internal/monitor` | `metric.asPrometheus` (no dims, one dim, multiple dims, negative value); `mon.asPrometheus` (HELP/TYPE headers, dedup, ordering) |
 

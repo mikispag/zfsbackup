@@ -382,6 +382,21 @@ func (fsp *fsProcessor) ProcessFs() error {
 	}
 }
 
+// includeProperties reports whether zfs send includes properties (-p), as
+// include_properties asks. OpenZFS refuses -p in a non-raw send of an
+// encrypted dataset, so such sends leave properties out with a warning
+// instead of failing: the data still reaches the destination.
+func (fsp *fsProcessor) includeProperties() bool {
+	if fsp.job.IncludeProperties != nil && !*fsp.job.IncludeProperties {
+		return false
+	}
+	if fsp.encrypted && !fsp.dst.RawSend {
+		slog.Warn("sending encrypted filesystem without properties: OpenZFS cannot include them in a non-raw send; set raw_send on this destination to keep them, or include_properties to false to silence this", "fs", fsp.fs, "receiver", fsp.dst.Receiver)
+		return false
+	}
+	return true
+}
+
 func (fsp *fsProcessor) GetNextAndSend() (retry bool, err error) {
 	p, err := fsp.fetchPlan()
 	if err != nil {
@@ -417,7 +432,7 @@ func (fsp *fsProcessor) GetNextAndSend() (retry bool, err error) {
 		return true, nil
 	}
 
-	includeProps := fsp.job.IncludeProperties == nil || *fsp.job.IncludeProperties
+	includeProps := fsp.includeProperties()
 	base := p.base
 	for _, snap := range fsp.ActualSnapsToSend(base) {
 		// Flags must precede the snapshot operand; some ZFS implementations
