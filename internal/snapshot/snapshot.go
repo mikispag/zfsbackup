@@ -141,6 +141,6 @@ func Main() {
 	}
 
 	if err := Run(cfg, *dryRun); err != nil {
-		zfs.MyFatalFnF("zfs snapshot completed with errors: %v", err)
+		zfs.Fatal("zfs snapshot completed with errors", "err", err)
 	}
 }

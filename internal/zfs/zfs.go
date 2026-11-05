@@ -396,23 +396,17 @@ func FSName(fullname string) string {
 }
 
 // SnapshotName returns the snapshot component of a full snapshot name
-// (everything after the @).
+// (everything after the @), or "" if fullname has no @.
 func SnapshotName(fullname string) string {
-	parts := strings.SplitN(fullname, "@", 2)
-	if len(parts) != 2 {
-		MyFatalFn(fmt.Sprintf("invalid snapshot name %q: missing @", fullname))
-	}
-	return parts[1]
+	_, name, _ := strings.Cut(fullname, "@")
+	return name
 }
 
 // BookmarkName returns the bookmark component of a full bookmark name
-// (everything after the #).
+// (everything after the #), or "" if fullname has no #.
 func BookmarkName(fullname string) string {
-	parts := strings.SplitN(fullname, "#", 2)
-	if len(parts) != 2 {
-		MyFatalFn(fmt.Sprintf("invalid bookmark name %q: missing #", fullname))
-	}
-	return parts[1]
+	_, name, _ := strings.Cut(fullname, "#")
+	return name
 }
 
 // zfsGcPlaceholder removes any placeholder bookmarks on the same filesystem

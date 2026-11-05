@@ -298,6 +298,6 @@ func Main() {
 	}
 
 	if err := Run(cfg, *parallelism, *dryRun); err != nil {
-		zfs.MyFatalFnF("deleter completed with errors:\n%s", err.Error())
+		zfs.Fatal("deleter completed with errors", "err", err)
 	}
 }

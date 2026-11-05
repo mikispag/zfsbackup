@@ -3,6 +3,7 @@ package receiver
 import (
 	"context"
 	"encoding/json/v2"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -15,30 +16,35 @@ import (
 	"github.com/mikispag/zfsbackup/internal/zfs"
 )
 
-func setPlaceholders(baseds, ds string) {
+func setPlaceholders(baseds, ds string) error {
 	sp := &config.SetPlaceholders{}
-	zfs.FatalIfError(json.UnmarshalRead(os.Stdin, sp), "cannot decode SetPlaceholders: %w")
+	if err := json.UnmarshalRead(os.Stdin, sp); err != nil {
+		return fmt.Errorf("cannot decode SetPlaceholders: %w", err)
+	}
 
 	interestingGuids := make(map[string]bool, len(sp.Placeholders))
 	for _, p := range sp.Placeholders {
 		if !zfs.IsValidPlaceholder(p.Name) {
-			zfs.Fatal("invalid placeholder suffix", "suffix", p.Name)
+			return fmt.Errorf("invalid placeholder suffix %q", p.Name)
 		}
 		interestingGuids[p.GUID] = true
 	}
 	if err := zfs.IsValidZFSDataset(sp.FS); err != nil {
-		zfs.Fatal("invalid filesystem in SetPlaceholders payload", "err", err)
+		return fmt.Errorf("invalid filesystem in SetPlaceholders payload: %w", err)
 	}
 	if sp.FS != ds {
-		zfs.Fatal("filesystem disagreement between payload and argument",
-			"payload_fs", sp.FS, "arg_ds", ds)
+		return fmt.Errorf("filesystem disagreement between payload (%s) and argument (%s)", sp.FS, ds)
 	}
 
 	destinationDs := fmt.Sprintf("%s/%s", baseds, sp.FS)
 	snaps, err := zfs.ZfsList([]string{"name", "guid"}, "snapshot", destinationDs)
-	zfs.FatalIfError(err, "cannot list snapshots: %w")
+	if err != nil {
+		return fmt.Errorf("cannot list snapshots: %w", err)
+	}
 	bms, err := zfs.ZfsList([]string{"name", "guid"}, "bookmark", destinationDs)
-	zfs.FatalIfError(err, "cannot list bookmarks: %w")
+	if err != nil {
+		return fmt.Errorf("cannot list bookmarks: %w", err)
+	}
 
 	byGuidSnaps := make(map[string][]string)
 	byGuidBms := make(map[string][]string)
@@ -53,12 +59,12 @@ func setPlaceholders(baseds, ds string) {
 		}
 	}
 
-	var errs []string
+	var errs []error
 PLACEHOLDERS:
 	for _, p := range sp.Placeholders {
 		guid := p.GUID
 		if len(byGuidBms[guid]) == 0 && len(byGuidSnaps[guid]) == 0 {
-			errs = append(errs, fmt.Sprintf("no snapshot/bookmark for %v", p))
+			errs = append(errs, fmt.Errorf("no snapshot/bookmark for %v", p))
 			continue
 		}
 		for _, b := range byGuidBms[guid] {
@@ -68,15 +74,13 @@ PLACEHOLDERS:
 		}
 		items := append(byGuidSnaps[guid], byGuidBms[guid]...)
 		if err := zfs.ZfsSetPlaceholder(items[0], p.Name); err != nil {
-			errs = append(errs, err.Error())
+			errs = append(errs, err)
 		}
 	}
-	if len(errs) > 0 {
-		zfs.MyFatalFnF("placeholder errors: %s", strings.Join(errs, "; "))
-	}
+	return errors.Join(errs...)
 }
 
-func incrementalSuggestion(baseds, ds string, cfg *config.ReceiverConfig) {
+func incrementalSuggestion(baseds, ds string, cfg *config.ReceiverConfig) error {
 	destinationDs := fmt.Sprintf("%s/%s", baseds, ds)
 	outp, err := zfs.ZfsList([]string{"name", "receive_resume_token"}, "filesystem", destinationDs)
 	ret := &config.IncrementalSuggestions{}
@@ -85,10 +89,12 @@ func incrementalSuggestion(baseds, ds string, cfg *config.ReceiverConfig) {
 		// A failed property query can also indicate permissions or a pool
 		// failure. Confirm absence before requesting an expensive full send.
 		filesystems, listErr := zfs.ZfsList([]string{"name"}, "filesystem", baseds, "-r")
-		zfs.FatalIfError(listErr, "cannot inspect destination datasets: %w")
+		if listErr != nil {
+			return fmt.Errorf("cannot inspect destination datasets: %w", listErr)
+		}
 		for _, row := range filesystems {
 			if row[0] == destinationDs {
-				zfs.Fatal("cannot inspect existing destination", "dataset", destinationDs, "err", err)
+				return fmt.Errorf("cannot inspect existing destination %s: %v", destinationDs, err)
 			}
 		}
 		ret.SendFull = true
@@ -97,8 +103,10 @@ func incrementalSuggestion(baseds, ds string, cfg *config.ReceiverConfig) {
 		if token != "-" {
 			ret.ResumeToken = token
 		}
-		snapoutp, snapErr := zfs.ZfsList([]string{"name", "guid"}, "snapshot", destinationDs, "-S", "createtxg")
-		zfs.FatalIfError(snapErr, "cannot list destination snapshots: %w")
+		snapoutp, err := zfs.ZfsList([]string{"name", "guid"}, "snapshot", destinationDs, "-S", "createtxg")
+		if err != nil {
+			return fmt.Errorf("cannot list destination snapshots: %w", err)
+		}
 		if len(snapoutp) >= 1 {
 			ret.LastSnapshot = zfs.SnapshotName(snapoutp[0][0])
 			ret.GUID = snapoutp[0][1]
@@ -116,7 +124,10 @@ func incrementalSuggestion(baseds, ds string, cfg *config.ReceiverConfig) {
 		}
 	}
 
-	zfs.FatalIfError(json.MarshalWrite(os.Stdout, ret), "cannot write IncrementalSuggestions: %w")
+	if err := json.MarshalWrite(os.Stdout, ret); err != nil {
+		return fmt.Errorf("cannot write IncrementalSuggestions: %w", err)
+	}
+	return nil
 }
 
 func createNotIfEncrypted(fs string, disableMount bool) error {
@@ -172,11 +183,10 @@ func receive(baseds, ds, compression string, cfg *config.ReceiverConfig) error {
 	}
 	for _, p := range cfg.EnforceLocalProperties {
 		if p == "" || strings.ContainsAny(p, " \t\n\r") {
-			zfs.Fatal("enforce_local_properties entry is empty or contains whitespace", "property", p)
+			return fmt.Errorf("enforce_local_properties entry %q is empty or contains whitespace", p)
 		}
 		if strings.HasPrefix(p, "-") {
-			zfs.Fatal("enforce_local_properties entry must not start with '-' (would be misinterpreted as a zfs receive flag)",
-				"property", p)
+			return fmt.Errorf("enforce_local_properties entry %q must not start with '-' (would be misinterpreted as a zfs receive flag)", p)
 		}
 		// zfs receive rejects '-o canmount=off' and '-x canmount' together;
 		// the explicit -o we just set is the stronger guarantee, so drop the -x.
@@ -198,7 +208,9 @@ func receive(baseds, ds, compression string, cfg *config.ReceiverConfig) error {
 			break
 		}
 	}
-	zfs.FatalIfError(checkParent(destinationDs, disableMount), "checking parent exists: %w")
+	if err := checkParent(destinationDs, disableMount); err != nil {
+		return fmt.Errorf("checking parent exists: %w", err)
+	}
 	recvArgs = append(recvArgs, destinationDs)
 
 	started := []*exec.Cmd{}
@@ -314,14 +326,18 @@ func Main() {
 	}
 	zfs.FatalIfError(zfs.IsValidZFSDataset(*dataset), "invalid dataset: %w")
 
+	var err error
 	switch strings.ToLower(*op) {
 	case "incremental_suggestions":
-		incrementalSuggestion(baseDS, *dataset, cfg)
+		err = incrementalSuggestion(baseDS, *dataset, cfg)
 	case "set_placeholders":
-		setPlaceholders(baseDS, *dataset)
+		err = setPlaceholders(baseDS, *dataset)
 	case "receive":
-		zfs.FatalIfError(receive(baseDS, *dataset, *compression, cfg), "receive pipeline failed: %w")
+		err = receive(baseDS, *dataset, *compression, cfg)
 	default:
 		zfs.Fatal("unknown operation", "op", *op)
+	}
+	if err != nil {
+		zfs.Fatal("receiver operation failed", "op", *op, "dataset", *dataset, "err", err)
 	}
 }

@@ -500,7 +500,10 @@ func autoPlaceholderName(cmdReceiver string) string {
 func buildReceiverCmd(ctx context.Context, cmdReceiver string, args ...string) *exec.Cmd {
 	parts := strings.Fields(cmdReceiver)
 	if len(parts) == 0 {
-		zfs.Fatal("receiver is empty")
+		// initSenderDefaults rejects empty receivers; if one slips through,
+		// let the command fail at Start ("exec: no command") instead of
+		// exiting the whole process from a per-filesystem goroutine.
+		parts = []string{""}
 	}
 	allArgs := append(parts[1:], args...)
 	cmd := exec.CommandContext(ctx, parts[0], allArgs...)

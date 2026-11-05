@@ -102,6 +102,7 @@ func TestSnapshotName(t *testing.T) {
 		{"tank@snap-2024", "snap-2024"},
 		{"tank/data@daily-2024-01-01", "daily-2024-01-01"},
 		{"pool/a/b@s", "s"},
+		{"tank#not-a-snapshot", ""},
 	}
 	for _, tc := range tests {
 		t.Run(tc.input, func(t *testing.T) {
@@ -121,6 +122,7 @@ func TestBookmarkName(t *testing.T) {
 		{"tank#bm-name", "bm-name"},
 		{"tank/data#my-bookmark", "my-bookmark"},
 		{"pool/a#x", "x"},
+		{"tank@not-a-bookmark", ""},
 	}
 	for _, tc := range tests {
 		t.Run(tc.input, func(t *testing.T) {

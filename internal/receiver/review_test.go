@@ -12,7 +12,9 @@ import (
 
 func TestIncrementalSuggestionDistinguishesAbsenceAndErrors(t *testing.T) {
 	if os.Getenv("ZFSBACKUP_RECEIVER_TEST") == "1" {
-		incrementalSuggestion("backup", "tank", &config.ReceiverConfig{})
+		if err := incrementalSuggestion("backup", "tank", &config.ReceiverConfig{}); err != nil {
+			t.Fatal(err)
+		}
 		return
 	}
 	for _, tc := range []struct {

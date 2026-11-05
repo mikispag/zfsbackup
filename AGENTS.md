@@ -175,7 +175,6 @@ All modules import `internal/zfs`. Key exports:
 | `LoadConfig(path, v any)` | Open, flock, `DecodeConfig`; caller closes the returned file after the job |
 | `DecodeConfig(r, v any)` | Strict single-value JSON decode for config files (rejects unknown/duplicate members) |
 | `FatalIfError(err, format)` | Log fatal + exit if err != nil; format must contain `%w` |
-| `MyFatalFn(v)` / `MyFatalFnF(fmt, args)` | Log fatal message + exit |
 | `SetupLogger(debug bool)` | Configure slog text handler on stderr with source annotation |
 | `Fatal(msg, args...)` | Log at Error level and call os.Exit(1) |
 | `DefaultExecCommand(ctx, arg0, args...)` | Exec wrapper: resolves binary path, sets `LC_ALL=C`, forwards stderr |
@@ -191,7 +190,7 @@ All modules import `internal/zfs`. Key exports:
 
 ## Error Handling Conventions
 
-- **Fatal errors** (config parse failures, ZFS unavailable, invalid dataset names): call `FatalIfError` or `MyFatalFn` — these log and call `os.Exit(1)`.
+- **Fatal errors** (config parse failures, ZFS unavailable, invalid dataset names): call `FatalIfError` or `Fatal` — these log and call `os.Exit(1)`. They belong only in `Main()` functions and startup code: library code and anything that runs per filesystem (including the receiver's operations) returns errors, and `Main()` exits once.
 - **Per-filesystem errors** (one dataset fails, others should continue): collected in a `[]error` slice, joined with `errors.Join`, returned from `Run()`, fataled in `Main()`.
 - **Pipeline errors**: returned from `eg.Wait()` and propagated up.
 

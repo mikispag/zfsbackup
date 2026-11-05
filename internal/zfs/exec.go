@@ -126,27 +126,19 @@ func SetupLogger(debug bool) {
 	slog.SetDefault(slog.New(h))
 }
 
-// Fatal logs msg at Error level and terminates the process.
+// Fatal logs msg at Error level and terminates the process; deferred functions
+// do not run. Use it only in Main functions and startup code, never in code
+// that runs per filesystem.
 func Fatal(msg string, args ...any) {
 	slog.Error(msg, args...)
 	os.Exit(1)
 }
 
-// MyFatalFn logs err at Error level and terminates the process.
-func MyFatalFn(err interface{}) {
-	Fatal(fmt.Sprintf("%v", err))
-}
-
-// MyFatalFnF logs a formatted message at Error level and terminates.
-func MyFatalFnF(txt string, args ...interface{}) {
-	MyFatalFn(fmt.Sprintf(txt, args...))
-}
-
-// FatalIfError calls MyFatalFn when err is non-nil.
+// FatalIfError calls Fatal when err is non-nil.
 // txt must contain a %w verb to wrap the error.
 func FatalIfError(err error, txt string) {
 	if err != nil {
-		MyFatalFn(fmt.Errorf(txt, err))
+		Fatal(fmt.Errorf(txt, err).Error())
 	}
 }
 
