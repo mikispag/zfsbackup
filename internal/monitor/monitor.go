@@ -17,10 +17,9 @@ import (
 )
 
 type metric struct {
-	Name          string
-	Dimensions    map[string]string
-	Value         int64
-	EvalTimestamp time.Time
+	Name       string
+	Dimensions map[string]string
+	Value      int64
 }
 
 func (m *metric) asPrometheus() string {
@@ -36,8 +35,9 @@ func (m *metric) asPrometheus() string {
 }
 
 type mon struct {
-	cfg     *config.MonitorConfig
-	metrics []metric
+	include, exclude []string
+	output           string // Prometheus textfile path; empty to only print
+	metrics          []metric
 }
 
 func (m *mon) zpoolMetrics() error {
@@ -68,17 +68,15 @@ func (m *mon) zpoolMetrics() error {
 			return fmt.Errorf("cannot parse pool capacity %q: %w", cap, err)
 		}
 		m.metrics = append(m.metrics, metric{
-			Name:          "PoolUsedSpacePercent",
-			Dimensions:    map[string]string{"pool": name},
-			Value:         pct,
-			EvalTimestamp: time.Now(),
+			Name:       "PoolUsedSpacePercent",
+			Dimensions: map[string]string{"pool": name},
+			Value:      pct,
 		})
 	}
 	m.metrics = append(m.metrics, metric{
-		Name:          "HasBrokenPool",
-		Dimensions:    map[string]string{},
-		Value:         brokenPools,
-		EvalTimestamp: time.Now(),
+		Name:       "HasBrokenPool",
+		Dimensions: map[string]string{},
+		Value:      brokenPools,
 	})
 	return nil
 }
@@ -100,15 +98,15 @@ func (m *mon) lastSnapMetricsOneFS(fs string) error {
 	}
 	now := time.Now()
 	m.metrics = append(m.metrics,
-		metric{Name: "LastSnapAge", Dimensions: map[string]string{"fs": fs}, Value: now.Unix() - unixtime, EvalTimestamp: now},
-		metric{Name: "LastSnapTimestamp", Dimensions: map[string]string{"fs": fs}, Value: unixtime, EvalTimestamp: now},
+		metric{Name: "LastSnapAge", Dimensions: map[string]string{"fs": fs}, Value: now.Unix() - unixtime},
+		metric{Name: "LastSnapTimestamp", Dimensions: map[string]string{"fs": fs}, Value: unixtime},
 	)
 	return nil
 }
 
 func (m *mon) lastSnapMetrics() error {
 	var errs []string
-	filesystems, err := zfs.ExpandFsToProcess(m.cfg.Include, m.cfg.Exclude)
+	filesystems, err := zfs.ExpandFsToProcess(m.include, m.exclude)
 	if err != nil {
 		errs = append(errs, err.Error())
 	}
@@ -182,11 +180,11 @@ func (m *mon) run() error {
 	}
 	collectedAt := time.Now()
 	m.metrics = append(m.metrics,
-		metric{Name: "MonitorSuccess", Value: success, EvalTimestamp: collectedAt},
-		metric{Name: "MonitorCollectionTimestamp", Value: collectedAt.Unix(), EvalTimestamp: collectedAt},
+		metric{Name: "MonitorSuccess", Value: success},
+		metric{Name: "MonitorCollectionTimestamp", Value: collectedAt.Unix()},
 	)
 	output := m.asPrometheus()
-	if filePath := m.cfg.PrometheusOutput; filePath != "" {
+	if filePath := m.output; filePath != "" {
 		if err := writePrometheusFile(filePath, output); err != nil {
 			return err
 		}
@@ -204,16 +202,11 @@ func Run(cfg *config.Config) error {
 		return fmt.Errorf("monitor: no monitor section in config")
 	}
 	mc := cfg.Monitor
-	include := cfg.ResolveInclude(mc.Include)
-	exclude := cfg.ResolveExclude(mc.Exclude)
-	// Create an effective MonitorConfig with resolved include/exclude for
-	// the internal mon type that calls ExpandFsToProcess directly.
-	effective := &config.MonitorConfig{
-		Include:          include,
-		Exclude:          exclude,
-		PrometheusOutput: mc.PrometheusOutput,
+	m := &mon{
+		include: cfg.ResolveInclude(mc.Include),
+		exclude: cfg.ResolveExclude(mc.Exclude),
+		output:  mc.PrometheusOutput,
 	}
-	m := &mon{cfg: effective}
 	return m.run()
 }
 

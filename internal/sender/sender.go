@@ -592,6 +592,7 @@ func Run(cfg *config.Config, parallelism int, limitFs string) error {
 	if err := initSenderDefaults(sc); err != nil {
 		return err
 	}
+	slog.Info("starting sender job", "job", sc.Name, "destinations", len(sc.Destinations))
 
 	if parallelism < 1 {
 		parallelism = 1

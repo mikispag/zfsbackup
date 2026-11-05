@@ -6,19 +6,15 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
-
-	"github.com/mikispag/zfsbackup/internal/config"
 )
 
 // --- metric.asPrometheus ---
 
 func TestMetricAsPrometheus_noDimensions(t *testing.T) {
 	m := metric{
-		Name:          "MyMetric",
-		Dimensions:    map[string]string{},
-		Value:         42,
-		EvalTimestamp: time.Now(),
+		Name:       "MyMetric",
+		Dimensions: map[string]string{},
+		Value:      42,
 	}
 	got := m.asPrometheus()
 	want := "MyMetric 42"
@@ -41,10 +37,9 @@ func TestMetricAsPrometheus_nilDimensions(t *testing.T) {
 
 func TestMetricAsPrometheus_oneDimension(t *testing.T) {
 	m := metric{
-		Name:          "PoolUsedSpacePercent",
-		Dimensions:    map[string]string{"pool": "tank"},
-		Value:         75,
-		EvalTimestamp: time.Now(),
+		Name:       "PoolUsedSpacePercent",
+		Dimensions: map[string]string{"pool": "tank"},
+		Value:      75,
 	}
 	got := m.asPrometheus()
 	// Should contain metric name, label, and value.
@@ -95,7 +90,6 @@ func TestMetricAsPrometheus_negativeValue(t *testing.T) {
 
 func TestMonAsPrometheus_singleMetric_hasHelpAndType(t *testing.T) {
 	m := &mon{
-		cfg: &config.MonitorConfig{},
 		metrics: []metric{
 			{Name: "MyCounter", Value: 1},
 		},
@@ -114,7 +108,6 @@ func TestMonAsPrometheus_singleMetric_hasHelpAndType(t *testing.T) {
 
 func TestMonAsPrometheus_sameMetricTwice_headerPrintedOnce(t *testing.T) {
 	m := &mon{
-		cfg: &config.MonitorConfig{},
 		metrics: []metric{
 			{Name: "LastSnapAge", Dimensions: map[string]string{"fs": "tank/a"}, Value: 100},
 			{Name: "LastSnapAge", Dimensions: map[string]string{"fs": "tank/b"}, Value: 200},
@@ -135,7 +128,6 @@ func TestMonAsPrometheus_sameMetricTwice_headerPrintedOnce(t *testing.T) {
 
 func TestMonAsPrometheus_differentMetrics_eachHasOwnHeader(t *testing.T) {
 	m := &mon{
-		cfg: &config.MonitorConfig{},
 		metrics: []metric{
 			{Name: "MetricA", Value: 1},
 			{Name: "MetricB", Value: 2},
@@ -158,7 +150,6 @@ func TestMonAsPrometheus_differentMetrics_eachHasOwnHeader(t *testing.T) {
 
 func TestMonAsPrometheus_noMetrics_emptyOutput(t *testing.T) {
 	m := &mon{
-		cfg:     &config.MonitorConfig{},
 		metrics: nil,
 	}
 	got := m.asPrometheus()
@@ -169,7 +160,6 @@ func TestMonAsPrometheus_noMetrics_emptyOutput(t *testing.T) {
 
 func TestMonAsPrometheus_ordering_headersBeforeValues(t *testing.T) {
 	m := &mon{
-		cfg: &config.MonitorConfig{},
 		metrics: []metric{
 			{Name: "Foo", Value: 7},
 		},

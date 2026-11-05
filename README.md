@@ -311,7 +311,7 @@ For a local backup to another pool:
 | `snapshot_re` | 🔍 Only snapshot names matching this regex are sent. Strongly recommended |
 | `send_intermediate` | 📋 Send every matching snapshot in order (default: only the newest) |
 | `include_properties` | 📦 Include ZFS properties in the stream (default: `true`) |
-| `name` | 🏷️ Optional descriptive label for the job; informational only |
+| `name` | 🏷️ Label for this job, logged when the sender starts |
 | `include` / `exclude` | Override the top-level filesystem lists |
 
 **Destination options** (inside each `destinations` entry):

@@ -164,8 +164,8 @@ type SenderConfig struct {
 	// Exclude overrides the top-level Config.Exclude for this module only.
 	Exclude []string `json:"exclude,omitempty"`
 
-	// Name is an optional human-readable label for this backup job. It is
-	// informational only: zfsbackup accepts it but does not use it.
+	// Name is an optional human-readable label for this backup job, logged
+	// when the sender starts.
 	Name string `json:"name,omitempty"`
 
 	// SnapshotRegex is a regular expression matched against the snapshot name
