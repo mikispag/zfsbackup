@@ -132,6 +132,26 @@ func TestPotentialSnapsToSend_noMatch(t *testing.T) {
 	}
 }
 
+// --- baseFor ---
+
+func TestBaseFor_prefersSnapshotOverBookmarkWithSameGUID(t *testing.T) {
+	fsp := makeFSP("", []source{
+		{Name: "tank#daily-02-peer", GUID: "2", Srctype: Bookmark},
+		{Name: "tank@daily-02", GUID: "2", Srctype: Snapshot},
+		{Name: "tank@daily-03", GUID: "3", Srctype: Snapshot},
+	})
+	if base, ok := fsp.baseFor("2"); !ok || base.Name != "tank@daily-02" {
+		t.Errorf("baseFor(2) = %v, %v; want the snapshot tank@daily-02", base, ok)
+	}
+	fsp.sources = fsp.sources[:1]
+	if base, ok := fsp.baseFor("2"); !ok || base.Name != "tank#daily-02-peer" {
+		t.Errorf("baseFor(2) without the snapshot = %v, %v; want the bookmark", base, ok)
+	}
+	if base, ok := fsp.baseFor("9"); ok {
+		t.Errorf("baseFor(9) = %v; want no base", base)
+	}
+}
+
 // --- getIncrementalParam ---
 
 func TestGetIncrementalParam_unknownSrctype_returnsNil(t *testing.T) {

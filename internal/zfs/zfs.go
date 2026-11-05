@@ -299,6 +299,11 @@ func ZfsList(props []string, t string, fullds string, flags ...string) ([][]stri
 		} else {
 			c = cmp.Compare(va, vb)
 		}
+		if c == 0 {
+			// JSON objects are unordered: break ties (e.g. a snapshot and
+			// its bookmarks share a createtxg) by name for a stable order.
+			c = cmp.Compare(a.key, b.key)
+		}
 		if descending {
 			return -c
 		}

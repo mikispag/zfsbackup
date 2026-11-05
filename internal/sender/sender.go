@@ -206,14 +206,32 @@ func (fsp *fsProcessor) GetIncrementalSuggestions() error {
 		return fmt.Errorf("receiver has a resume token for %s but resumable is disabled", fsp.fs)
 	}
 	if is.LastSnapshot != "" && is.GUID != "" {
-		for _, s := range fsp.sources {
-			if s.GUID == is.GUID {
-				fsp.incremental = s
-				return nil
-			}
+		if base, ok := fsp.baseFor(is.GUID); ok {
+			fsp.incremental = base
 		}
 	}
 	return nil
+}
+
+// baseFor returns the local source with the given GUID to use as the
+// incremental base. A snapshot and the bookmarks created from it share both
+// GUID and createtxg, so the snapshot is preferred explicitly: the choice is
+// then deterministic and valid for every send mode.
+func (fsp *fsProcessor) baseFor(guid string) (source, bool) {
+	var bookmark source
+	found := false
+	for _, s := range fsp.sources {
+		if s.GUID != guid {
+			continue
+		}
+		if s.Srctype == Snapshot {
+			return s, true
+		}
+		if !found {
+			bookmark, found = s, true
+		}
+	}
+	return bookmark, found
 }
 
 func (fsp *fsProcessor) FillSources() error {
