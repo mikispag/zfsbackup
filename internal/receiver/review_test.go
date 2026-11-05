@@ -48,7 +48,7 @@ func TestReceiveHonorsDisableMount(t *testing.T) {
 			allow := false
 			cfg.DisableMount = &allow
 		}
-		if err := receive("backup", "tank", "none", cfg, true); err != nil {
+		if err := receive("backup", "tank", "none", cfg); err != nil {
 			t.Fatal(err)
 		}
 		return
@@ -56,7 +56,8 @@ func TestReceiveHonorsDisableMount(t *testing.T) {
 	for _, mode := range []string{"default", "allow"} {
 		t.Run(mode, func(t *testing.T) {
 			dir := t.TempDir()
-			script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$ZFSBACKUP_RECEIVE_ARGS\"\n"
+			// The parent check lists the base dataset; record only zfs receive.
+			script := "#!/bin/sh\ncase \"$1\" in\nlist) printf '%s' '{\"datasets\":{\"backup\":{}}}';;\n*) printf '%s\\n' \"$@\" > \"$ZFSBACKUP_RECEIVE_ARGS\";;\nesac\n"
 			if err := os.WriteFile(filepath.Join(dir, "zfs"), []byte(script), 0o700); err != nil {
 				t.Fatal(err)
 			}

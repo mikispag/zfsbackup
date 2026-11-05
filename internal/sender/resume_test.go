@@ -13,8 +13,7 @@ import (
 func TestResumeValidatesTargetAndPreservesRawSend(t *testing.T) {
 	if os.Getenv("ZFSBACKUP_RESUME_TEST") == "1" {
 		dir := os.Getenv("ZFSBACKUP_RESUME_DIR")
-		resumable := true
-		job := &config.SenderConfig{SnapshotRegex: "daily", Resumable: &resumable}
+		job := &config.SenderConfig{SnapshotRegex: "daily"}
 		dst := &config.DestinationConfig{Receiver: filepath.Join(dir, "receiver"), RawSend: true, Placeholders: []string{"backup"}}
 		if os.Getenv("ZFSBACKUP_RESUME_SYNC") == "1" {
 			dst.SyncPlaceholders = []string{"peer"}

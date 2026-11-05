@@ -199,12 +199,7 @@ func (fsp *fsProcessor) GetIncrementalSuggestions() error {
 		fsp.sendFull = true
 		return nil
 	}
-	resumable := fsp.job.Resumable == nil || *fsp.job.Resumable
-	if is.ResumeToken != "" && resumable {
-		fsp.resumeToken = is.ResumeToken
-	} else if is.ResumeToken != "" {
-		return fmt.Errorf("receiver has a resume token for %s but resumable is disabled", fsp.fs)
-	}
+	fsp.resumeToken = is.ResumeToken
 	if is.LastSnapshot != "" && is.GUID != "" {
 		if base, ok := fsp.baseFor(is.GUID); ok {
 			fsp.incremental = base
@@ -292,7 +287,7 @@ func compressionType(dst *config.DestinationConfig) string {
 	return dst.Compression
 }
 
-func (fsp *fsProcessor) send(zfsArgs []string, fast bool) error {
+func (fsp *fsProcessor) send(zfsArgs []string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	eg, ctx := zfs.NewGroup(ctx)
@@ -330,9 +325,6 @@ func (fsp *fsProcessor) send(zfsArgs []string, fast bool) error {
 	}
 	receiverArgs := []string{"--op=receive", "--dataset=" + fsp.fs,
 		"--compression=" + ct}
-	if fast {
-		receiverArgs = append(receiverArgs, "--fast")
-	}
 	cmd := buildReceiverCmd(ctx, fsp.dst.Receiver, receiverArgs...)
 	cmd.Stdin = reader
 	cmd.Stdout = os.Stdout
@@ -434,7 +426,7 @@ func (fsp *fsProcessor) GetNextAndSend() (retry bool, err error) {
 		if err := fsp.setPlaceholdersBefore(snap); err != nil {
 			return false, err
 		}
-		if err := fsp.send(sendArgs, false); err != nil {
+		if err := fsp.send(sendArgs); err != nil {
 			return false, err
 		}
 		if err := fsp.setPlaceholdersAfter(snap); err != nil {
@@ -444,7 +436,6 @@ func (fsp *fsProcessor) GetNextAndSend() (retry bool, err error) {
 	}
 
 	includeProps := fsp.job.IncludeProperties == nil || *fsp.job.IncludeProperties
-	fast := false
 	for _, snap := range fsp.ActualSnapsToSend() {
 		// Flags must precede the snapshot operand; some ZFS implementations
 		// do not accept POSIX argument permutation.
@@ -461,14 +452,13 @@ func (fsp *fsProcessor) GetNextAndSend() (retry bool, err error) {
 		if err := fsp.setPlaceholdersBefore(snap); err != nil {
 			return false, err
 		}
-		if err := fsp.send(sendArgs, fast); err != nil {
+		if err := fsp.send(sendArgs); err != nil {
 			return false, err
 		}
 		fsp.incremental = snap
 		if err := fsp.setPlaceholdersAfter(snap); err != nil {
 			return false, err
 		}
-		fast = true
 	}
 
 	if err := fsp.sendPlaceholders(); err != nil {
@@ -569,9 +559,8 @@ func initSenderDefaults(sc *config.SenderConfig) error {
 	if _, err := regexp.Compile("^(?:" + sc.SnapshotRegex + ")$"); err != nil {
 		return fmt.Errorf("invalid sender snapshot_re: %w", err)
 	}
-	if sc.Resumable == nil {
-		t := true
-		sc.Resumable = &t
+	if sc.Resumable != nil {
+		slog.Warn("sender option resumable is deprecated and ignored; interrupted transfers always resume when the receiver allows it (receiver option resumable)")
 	}
 	if sc.IncludeProperties == nil {
 		t := true

@@ -311,7 +311,6 @@ For a local backup to another pool:
 | `snapshot_re` | 🔍 Only snapshot names matching this regex are sent. Strongly recommended |
 | `send_intermediate` | 📋 Send every matching snapshot in order (default: only the newest) |
 | `include_properties` | 📦 Include ZFS properties in the stream (default: `true`) |
-| `resumable` | ♻️ Use resumable transfers (default: `true`; must match the receiver's `resumable`) |
 | `name` | 🏷️ Optional descriptive label for the job; informational only |
 | `include` / `exclude` | Override the top-level filesystem lists |
 
@@ -352,7 +351,7 @@ command="/usr/local/bin/zfsbackup receiver --base_dataset=backuppool/backups/myh
 | `mbuffer_args` | Buffer on the receiving side; defaults to `-P 90 -m 3%` when mbuffer is installed |
 | `enforce_local_properties` | ZFS properties to exclude from the stream (`zfs receive -x`) so local values apply |
 | `disable_mount` | Pass `-u -o canmount=off` to `zfs receive` so received datasets are never mounted, now or by a later `zfs mount -a` or boot (default: `true`) |
-| `resumable` | ♻️ Pass `-s` to `zfs receive` so interrupted transfers can resume (default: `true`; must match the sender's `resumable`) |
+| `resumable` | ♻️ Pass `-s` to `zfs receive` so interrupted transfers can resume (default: `true`). The sender resumes automatically whenever the receiver holds a resume token |
 | `force_overwrite_datasets` | 💥 Destinations where `zfs receive -F` may overwrite an existing dataset. Use only to recover a broken incremental chain |
 
 ```json

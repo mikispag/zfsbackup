@@ -22,19 +22,14 @@ func TestPotentialSnapsToSendAnchorsAlternatives(t *testing.T) {
 	}
 }
 
-func TestGetNextAndSendRejectsUnusableReceiverState(t *testing.T) {
-	for _, payload := range []string{`{}`, `{"resume_token":"pending"}`} {
-		t.Run(payload, func(t *testing.T) {
-			receiver := filepath.Join(t.TempDir(), "receiver")
-			if err := os.WriteFile(receiver, []byte("#!/bin/sh\nprintf '%s' '"+payload+"'\n"), 0o700); err != nil {
-				t.Fatal(err)
-			}
-			resumable := false
-			fsp := &fsProcessor{fs: "tank", job: &config.SenderConfig{Resumable: &resumable}, dst: &config.DestinationConfig{Receiver: receiver}}
-			if _, err := fsp.GetNextAndSend(); err == nil {
-				t.Fatal("unusable receiver state reported a successful backup")
-			}
-		})
+func TestGetNextAndSendRejectsMissingCommonBase(t *testing.T) {
+	receiver := filepath.Join(t.TempDir(), "receiver")
+	if err := os.WriteFile(receiver, []byte("#!/bin/sh\nprintf '%s' '{}'\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	fsp := &fsProcessor{fs: "tank", job: &config.SenderConfig{}, dst: &config.DestinationConfig{Receiver: receiver}}
+	if _, err := fsp.GetNextAndSend(); err == nil {
+		t.Fatal("a destination without a common base reported a successful backup")
 	}
 }
 
@@ -145,17 +140,17 @@ func TestSenderPipeline(t *testing.T) {
 		} {
 			fsp := &fsProcessor{fs: "tank", dst: &dst}
 			for i := 0; i < 25; i++ {
-				if err := fsp.send([]string{"send", "tank@snapshot"}, false); err != nil {
+				if err := fsp.send([]string{"send", "tank@snapshot"}); err != nil {
 					t.Fatal(err)
 				}
 			}
 		}
 		fsp := &fsProcessor{fs: "tank", dst: &config.DestinationConfig{Receiver: filepath.Join(dir, "missing-receiver"), Compression: "zstd", MbufferArgs: []string{"-p 90"}}}
-		if err := fsp.send([]string{"send", "tank@snapshot"}, false); err == nil {
+		if err := fsp.send([]string{"send", "tank@snapshot"}); err == nil {
 			t.Fatal("missing receiver unexpectedly started")
 		}
 		fsp.dst.Compression = "invalid"
-		if err := fsp.send([]string{"send", "tank@snapshot"}, false); err == nil {
+		if err := fsp.send([]string{"send", "tank@snapshot"}); err == nil {
 			t.Fatal("invalid compressor unexpectedly started")
 		}
 		return

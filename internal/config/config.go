@@ -186,9 +186,10 @@ type SenderConfig struct {
 	// so each destination inherits source properties. Defaults to true if nil.
 	IncludeProperties *bool `json:"include_properties,omitempty"`
 
-	// Resumable enables resumable send/receive (zfs send/receive -s). An
-	// interrupted transfer is resumed on the next run rather than restarted.
-	// Defaults to true if nil. Must match the receiver's resumable setting.
+	// Resumable is deprecated and ignored: the sender always resumes an
+	// interrupted transfer when the receiver reports a resume token, and the
+	// receiver's resumable setting decides whether such tokens exist. It is
+	// still accepted so that existing configs keep loading.
 	Resumable *bool `json:"resumable,omitempty"`
 
 	// Destinations is the list of backup targets for this job. Each destination
@@ -293,8 +294,8 @@ type ReceiverConfig struct {
 	DisableMount *bool `json:"disable_mount,omitempty"`
 
 	// Resumable enables zfs receive -s so interrupted transfers can be resumed
-	// on the next run. Must match the sender's Resumable setting; a mismatch
-	// causes transfer errors. Defaults to true if nil.
+	// on the next run; when false, an interrupted transfer restarts from the
+	// beginning. Defaults to true if nil.
 	Resumable *bool `json:"resumable,omitempty"`
 
 	// ForceOverwriteDatasets lists destination datasets where zfs receive -F is

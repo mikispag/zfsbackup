@@ -155,7 +155,7 @@ func checkParent(fs string, disableMount bool) error {
 	return err
 }
 
-func receive(baseds, ds, compression string, cfg *config.ReceiverConfig, fast bool) error {
+func receive(baseds, ds, compression string, cfg *config.ReceiverConfig) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	eg, ctx := zfs.NewGroup(ctx)
@@ -198,9 +198,7 @@ func receive(baseds, ds, compression string, cfg *config.ReceiverConfig, fast bo
 			break
 		}
 	}
-	if !fast {
-		zfs.FatalIfError(checkParent(destinationDs, disableMount), "checking parent exists: %w")
-	}
+	zfs.FatalIfError(checkParent(destinationDs, disableMount), "checking parent exists: %w")
 	recvArgs = append(recvArgs, destinationDs)
 
 	started := []*exec.Cmd{}
@@ -296,7 +294,8 @@ func Main() {
 
 	clientFlags := flag.NewFlagSet("receiver-client", flag.ExitOnError)
 	dataset := clientFlags.String("dataset", "", "destination dataset")
-	fast := clientFlags.Bool("fast", false, "skip some existence checks for speed")
+	// --fast used to skip existence checks; older senders still pass it.
+	clientFlags.Bool("fast", false, "ignored; accepted for compatibility with older senders")
 	op := clientFlags.String("op", "", "operation: incremental_suggestions | set_placeholders | receive")
 	compression := clientFlags.String("compression", "none", "compression algorithm in use")
 	if sshCmd := os.Getenv("SSH_ORIGINAL_COMMAND"); sshCmd != "" {
@@ -310,7 +309,7 @@ func Main() {
 		zfs.Fatal("unexpected receiver arguments", "args", clientFlags.Args())
 	}
 
-	if !*fast && !zfs.Exists(baseDS) {
+	if !zfs.Exists(baseDS) {
 		zfs.Fatal("base dataset does not exist", "base_dataset", baseDS)
 	}
 	zfs.FatalIfError(zfs.IsValidZFSDataset(*dataset), "invalid dataset: %w")
@@ -321,7 +320,7 @@ func Main() {
 	case "set_placeholders":
 		setPlaceholders(baseDS, *dataset)
 	case "receive":
-		zfs.FatalIfError(receive(baseDS, *dataset, *compression, cfg, *fast), "receive pipeline failed: %w")
+		zfs.FatalIfError(receive(baseDS, *dataset, *compression, cfg), "receive pipeline failed: %w")
 	default:
 		zfs.Fatal("unknown operation", "op", *op)
 	}

@@ -53,7 +53,6 @@ cat >$TEST_TMP_DIR/sender_breakafter2m.json <<EOF
   "exclude": ["$TESTFS/sender/excluded"],
   "sender": {
     "snapshot_re": "snap_remote.*",
-    "resumable": true,
     "destinations": [
       {"receiver": "$TEST_TMP_DIR/receiver_limited.sh ssh -F $SSH_TEST_PATH/ssh_config -- test_target"}
     ]
