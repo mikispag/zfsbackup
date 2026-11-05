@@ -1,6 +1,7 @@
 .vscode/**
 /zfsbackup
 /tasks/
+/.serena/
 tests/cover.html
 tests/fakesnaps/gensnaps
 tests/ssh/authorized_keys
