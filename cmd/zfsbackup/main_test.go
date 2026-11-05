@@ -95,9 +95,32 @@ func TestCLIRejectsTrailingConfigData(t *testing.T) {
 		}
 		for _, command := range []string{"run", "receiver"} {
 			output, err := cliCommand(t, command, "--config", configFile).CombinedOutput()
-			if err == nil || !strings.Contains(string(output), "exactly one JSON value") {
+			if err == nil || !strings.Contains(string(output), "after top-level value") {
 				t.Errorf("%s accepted config %q: err=%v, output=%s", command, contents, err, output)
 			}
+		}
+	}
+}
+
+func TestCLIRejectsAmbiguousConfigMembers(t *testing.T) {
+	tests := []struct {
+		command, contents, want string
+	}{
+		{"run", `{"monitor":{},"monitor":{}}`, "duplicate object member name"},
+		{"run", `{"Monitor":{}}`, "unknown object member name"},
+		{"run", `{"bogus":true}`, "unknown object member name"},
+		{"receiver", `{"base_dataset":"a","base_dataset":"b"}`, "duplicate object member name"},
+		{"receiver", `{"Base_Dataset":"a"}`, "unknown object member name"},
+		{"receiver", `{"bogus":true}`, "unknown object member name"},
+	}
+	for _, tt := range tests {
+		configFile := filepath.Join(t.TempDir(), "config.json")
+		if err := os.WriteFile(configFile, []byte(tt.contents), 0600); err != nil {
+			t.Fatal(err)
+		}
+		output, err := cliCommand(t, tt.command, "--config", configFile).CombinedOutput()
+		if err == nil || !strings.Contains(string(output), tt.want) {
+			t.Errorf("%s accepted config %s: err=%v, output=%s", tt.command, tt.contents, err, output)
 		}
 	}
 }

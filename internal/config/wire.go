@@ -10,7 +10,7 @@
 //     to the receiver's stdin; the receiver processes it and exits.
 //
 // Both sides should be running the same version of zfsbackup. The wire
-// types use json.Unmarshal (not DisallowUnknownFields), so unknown fields
+// types are decoded without json.RejectUnknownMembers, so unknown fields
 // are silently ignored — the protocol is forward-compatible but there is no
 // automatic detection of a version mismatch.
 package config
@@ -33,7 +33,7 @@ package config
 type IncrementalSuggestions struct {
 	// SendFull, when true, instructs the sender to transmit a complete
 	// (non-incremental) stream. Mutually exclusive with ResumeToken.
-	SendFull bool `json:"send_full,omitempty"`
+	SendFull bool `json:"send_full,omitzero"`
 
 	// ResumeToken is the value of the receive_resume_token ZFS property on the
 	// destination. Pass it to zfs send -t to resume the interrupted transfer.
@@ -52,7 +52,7 @@ type IncrementalSuggestions struct {
 	// ForceOverwrite signals that the destination is listed in the receiver's
 	// force_overwrite_datasets. When set, the sender transmits a full stream
 	// even if no common base exists, and the receiver applies zfs receive -F.
-	ForceOverwrite bool `json:"force_overwrite,omitempty"`
+	ForceOverwrite bool `json:"force_overwrite,omitzero"`
 }
 
 // SetPlaceholders is the JSON payload the sender writes to the receiver's

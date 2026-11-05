@@ -76,7 +76,9 @@ func TestLoadConfigRetainsLock(t *testing.T) {
 	if err := os.WriteFile(filePath, []byte(`{"value":7}`), 0600); err != nil {
 		t.Fatal(err)
 	}
-	var cfg struct{ Value int }
+	var cfg struct {
+		Value int `json:"value"`
+	}
 	lock := LoadConfig(filePath, &cfg)
 	defer lock.Close()
 	if cfg.Value != 7 {

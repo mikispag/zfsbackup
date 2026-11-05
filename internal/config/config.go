@@ -124,7 +124,7 @@ type DestinationConfig struct {
 	// RawSend transmits the stream in raw encrypted form (zfs send -e -c -w).
 	// The receiver stores ciphertext and never sees the encryption key. Requires
 	// native ZFS encryption on the source dataset.
-	RawSend bool `json:"raw_send,omitempty"`
+	RawSend bool `json:"raw_send,omitzero"`
 
 	// Placeholders lists placeholder bookmark suffixes to create on the source
 	// after each successful send. A bookmark named #<snapname>-<suffix> is
@@ -179,7 +179,7 @@ type SenderConfig struct {
 	// current incremental base in order, so each destination accumulates a
 	// complete history. When false (the default), only the most recent matching
 	// snapshot is sent per run.
-	SendIntermediate bool `json:"send_intermediate,omitempty"`
+	SendIntermediate bool `json:"send_intermediate,omitzero"`
 
 	// IncludeProperties includes ZFS property data in the stream (zfs send -p)
 	// so each destination inherits source properties. Defaults to true if nil.
@@ -213,7 +213,7 @@ type RetentionRule struct {
 	// error. Defaults to false. Leave false in normal operation so that
 	// unexpected gaps surface as an error rather than silently reducing
 	// retention.
-	AllowHoles bool `json:"allow_holes,omitempty"`
+	AllowHoles bool `json:"allow_holes,omitzero"`
 }
 
 // DeleterConfig configures the deleter module.
@@ -232,7 +232,7 @@ type DeleterConfig struct {
 	// PreserveTopN always preserves the N most recent matching snapshots,
 	// regardless of age or rule evaluation. Evaluated before interval rules.
 	// Zero means no unconditional preservation.
-	PreserveTopN int64 `json:"preserve_top_n,omitempty"`
+	PreserveTopN int64 `json:"preserve_top_n,omitzero"`
 
 	// PreserveNewerThan, when non-empty, always preserves snapshots younger than
 	// this duration, regardless of rule evaluation. The reference point is the

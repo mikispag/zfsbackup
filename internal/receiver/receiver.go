@@ -2,10 +2,9 @@ package receiver
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"flag"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -17,11 +16,8 @@ import (
 )
 
 func setPlaceholders(baseds, ds string) {
-	spBytes, err := io.ReadAll(os.Stdin)
-	zfs.FatalIfError(err, "cannot read from stdin: %w")
 	sp := &config.SetPlaceholders{}
-	err = json.Unmarshal(spBytes, sp)
-	zfs.FatalIfError(err, "cannot decode SetPlaceholders: %w")
+	zfs.FatalIfError(json.UnmarshalRead(os.Stdin, sp), "cannot decode SetPlaceholders: %w")
 
 	interestingGuids := make(map[string]bool, len(sp.Placeholders))
 	for _, p := range sp.Placeholders {
@@ -120,11 +116,7 @@ func incrementalSuggestion(baseds, ds string, cfg *config.ReceiverConfig) {
 		}
 	}
 
-	out, err := json.Marshal(ret)
-	zfs.FatalIfError(err, "cannot encode IncrementalSuggestions: %w")
-	if _, err := os.Stdout.Write(out); err != nil {
-		zfs.Fatal("cannot write response to stdout", "err", err)
-	}
+	zfs.FatalIfError(json.MarshalWrite(os.Stdout, ret), "cannot write IncrementalSuggestions: %w")
 }
 
 func createNotIfEncrypted(fs string, disableMount bool) error {
@@ -281,12 +273,7 @@ func Main() {
 		f, err := os.Open(*configFile)
 		zfs.FatalIfError(err, "cannot open config file: %w")
 		defer f.Close()
-		d := json.NewDecoder(f)
-		d.DisallowUnknownFields()
-		zfs.FatalIfError(d.Decode(cfg), "cannot parse config: %w")
-		if err := d.Decode(new(any)); err != io.EOF {
-			zfs.Fatal("receiver config must contain exactly one JSON value", "err", err)
-		}
+		zfs.FatalIfError(zfs.DecodeConfig(f, cfg), "cannot parse config: %w")
 	}
 
 	baseDS := cfg.BaseDataset

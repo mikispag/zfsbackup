@@ -3,7 +3,8 @@ package zfs
 import (
 	"cmp"
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"log/slog"
 	"regexp"
@@ -153,11 +154,11 @@ type zfsPropValue struct {
 // only one of those places depending on the ZFS version, so the parser tries
 // the properties block first and falls back to the top-level scalar.
 type zfsListJSON struct {
-	Datasets map[string]json.RawMessage `json:"datasets"`
+	Datasets map[string]jsontext.Value `json:"datasets"`
 }
 
 type zpoolListJSON struct {
-	Pools map[string]json.RawMessage `json:"pools"`
+	Pools map[string]jsontext.Value `json:"pools"`
 }
 
 // extractProps decodes a single dataset/pool entry into a flat map of property
@@ -165,8 +166,8 @@ type zpoolListJSON struct {
 // scalar top-level field is used as-is. This lets callers request "name" or
 // "pool" (which zfs-list keeps at the top level) alongside actual properties
 // such as "creation" or "used".
-func extractProps(raw json.RawMessage) (map[string]string, error) {
-	var top map[string]json.RawMessage
+func extractProps(raw jsontext.Value) (map[string]string, error) {
+	var top map[string]jsontext.Value
 	if err := json.Unmarshal(raw, &top); err != nil {
 		return nil, err
 	}

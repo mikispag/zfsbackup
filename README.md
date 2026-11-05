@@ -496,7 +496,7 @@ A filesystem with no snapshots exports `LastSnapTimestamp=0` and `LastSnapAge` a
 
 ## 📥 Installation
 
-Building requires Go 1.25 or newer. Both hosts need OpenZFS 2.3 or newer: zfsbackup uses the JSON command output [introduced in OpenZFS 2.3](https://github.com/openzfs/zfs/releases/tag/zfs-2.3.0). Install `zstd` for compressed transfers and `mbuffer` when configuring buffering.
+Building requires Go 1.27 or newer. Both hosts need OpenZFS 2.3 or newer: zfsbackup uses the JSON command output [introduced in OpenZFS 2.3](https://github.com/openzfs/zfs/releases/tag/zfs-2.3.0). Install `zstd` for compressed transfers and `mbuffer` when configuring buffering.
 
 ```sh
 go install github.com/mikispag/zfsbackup/cmd/zfsbackup@latest

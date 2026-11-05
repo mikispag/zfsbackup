@@ -4,7 +4,7 @@ package zfs
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -152,19 +152,22 @@ func FatalIfError(err error, txt string) {
 
 // LoadConfig reads, exclusively flocks, and JSON-decodes the config file at
 // filePath into v (which must be a pointer). The caller must close the returned
-// file after completing its work; closing releases the lock. Unknown fields
-// and loading failures are fatal errors.
+// file after completing its work; closing releases the lock. Decoding follows
+// DecodeConfig; loading failures are fatal errors.
 func LoadConfig(filePath string, v any) *os.File {
 	f, err := os.Open(filePath)
 	FatalIfError(err, "cannot open config file: %w")
 	FatalIfError(syscall.Flock(int(f.Fd()), syscall.LOCK_EX), "cannot lock config file: %w")
-	d := json.NewDecoder(f)
-	d.DisallowUnknownFields()
-	FatalIfError(d.Decode(v), "cannot parse config: %w")
-	if err := d.Decode(new(any)); err != io.EOF {
-		Fatal("config must contain exactly one JSON value", "err", err)
-	}
+	FatalIfError(DecodeConfig(f, v), "cannot parse config: %w")
 	return f
+}
+
+// DecodeConfig strictly decodes exactly one JSON value from r into v. Beyond
+// encoding/json/v2's defaults (case-sensitive member names, no duplicate
+// members, valid UTF-8, no trailing data), unknown members are rejected so
+// that misspelled config keys fail loudly instead of being ignored.
+func DecodeConfig(r io.Reader, v any) error {
+	return json.UnmarshalRead(r, v, json.RejectUnknownMembers(true))
 }
 
 // MaybeMbuffer wraps input with mbuffer when mbufferArgs is non-empty.

@@ -29,8 +29,8 @@ Makefile
 
 ## Technology Stack
 
-- **Go 1.25** — no CGO, statically linked binary, zero external dependencies
-- **encoding/json** (stdlib) — config files and internal IPC (sender↔receiver) use JSON
+- **Go 1.27** — no CGO, statically linked binary, zero external dependencies
+- **encoding/json/v2** (stdlib) — config files and internal IPC (sender↔receiver) use JSON; `zfs list -j`/`zpool list -j` output is parsed via `encoding/json/jsontext.Value`. Do not import the v1 `encoding/json` package.
 - **log/slog** (stdlib) — structured logging to stderr via `slog.NewTextHandler`; level and source file/line controlled by `SetupLogger(debug)`
 - **ZFS** — invoked as external processes (`zfs`, `zpool`, `mbuffer`, `zstd`); binaries are located once at startup and cached
 
@@ -65,7 +65,9 @@ The receiver uses a separate JSON file (`config.ReceiverConfig`), not `config.Co
 
 ### Config Loading Pattern
 
-All modules that load a config call `zfs.LoadConfig(path, v)`, which opens the file, acquires an exclusive `flock`, and JSON-decodes it with `DisallowUnknownFields`. The caller retains the returned `*os.File` and defers its `Close()` until the job completes. This serializes invocations using the same config inode and catches config typos. An atomically replaced config or a different config file has a separate lock. The Receiver is the exception — its config is optional (`if *configFile != ""`), read-only, and shared by concurrent SSH receivers. It loads its config manually with `json.NewDecoder` + `DisallowUnknownFields`. Both loaders reject trailing JSON values.
+All modules that load a config call `zfs.LoadConfig(path, v)`, which opens the file, acquires an exclusive `flock`, and JSON-decodes it with `zfs.DecodeConfig`. The caller retains the returned `*os.File` and defers its `Close()` until the job completes. This serializes invocations using the same config inode and catches config typos. An atomically replaced config or a different config file has a separate lock. The Receiver is the exception — its config is optional (`if *configFile != ""`), read-only, and shared by concurrent SSH receivers. It opens its config without locking and decodes it with the same `zfs.DecodeConfig`.
+
+`zfs.DecodeConfig(r, v)` is `json.UnmarshalRead(r, v, json.RejectUnknownMembers(true))`. Together with the `encoding/json/v2` defaults it rejects unknown members, member names that differ in case from the struct tag, duplicate member names, invalid UTF-8, and trailing data after the single top-level value. `RejectUnknownMembers` is **not** a v2 default: always decode configs through `DecodeConfig`, never with a bare `json.Unmarshal`/`json.UnmarshalRead`.
 
 ### Duration Strings
 
@@ -162,7 +164,7 @@ The sender and receiver communicate via JSON on the SSH channel's stdin/stdout. 
 - **`SetPlaceholders`** — JSON written by the sender to the receiver's stdin for `set_placeholders` requests
 - **`PlaceholderEntry`** — entry in `SetPlaceholders.Placeholders`
 
-Both sides use `json.Marshal`/`json.Unmarshal`. The receiver's `incremental_suggestions` handler uses `json.Marshal`; the sender decodes with `json.Unmarshal`. The `set_placeholders` flow is reversed: sender marshals and writes to stdin, receiver reads and unmarshals.
+Both sides use `encoding/json/v2` with default options, so unknown wire members are ignored (forward compatibility). The receiver's `incremental_suggestions` handler writes with `json.MarshalWrite(os.Stdout, …)`; the sender decodes with `json.Unmarshal`. The `set_placeholders` flow is reversed: the sender marshals and writes to stdin, the receiver decodes with `json.UnmarshalRead(os.Stdin, …)`.
 
 ## Shared `zfs` Package
 
@@ -170,7 +172,8 @@ All modules import `internal/zfs`. Key exports:
 
 | Symbol | Purpose |
 |---|---|
-| `LoadConfig(path, v any)` | Open, flock, JSON-decode; caller closes the returned file after the job |
+| `LoadConfig(path, v any)` | Open, flock, `DecodeConfig`; caller closes the returned file after the job |
+| `DecodeConfig(r, v any)` | Strict single-value JSON decode for config files (rejects unknown/duplicate members) |
 | `FatalIfError(err, format)` | Log fatal + exit if err != nil; format must contain `%w` |
 | `MyFatalFn(v)` / `MyFatalFnF(fmt, args)` | Log fatal message + exit |
 | `SetupLogger(debug bool)` | Configure slog text handler on stderr with source annotation |
@@ -260,7 +263,7 @@ Unit tests create `deleteFsProcessor` and `fsProcessor` structs directly — the
 
 4. **Config files are flocked**: keep the `*os.File` returned by `LoadConfig` open until the entire job completes. This serializes jobs using the same config inode. Different config files or atomic file replacement do not share that lock. The read-only receiver config remains exempt.
 
-5. **JSON format, not prototext**: config files are parsed with `encoding/json`. Field names are JSON snake_case as defined in the struct tags. Unknown fields cause a parse error (`DisallowUnknownFields`).
+5. **JSON format, not prototext**: config files are parsed with `encoding/json/v2` via `zfs.DecodeConfig`. Field names are JSON snake_case as defined in the struct tags and are matched case-sensitively. Unknown or duplicate members cause a parse error.
 
 6. **`dfp.now` is set to the most recent snapshot's timestamp, not `time.Now()`**: retention rules are evaluated relative to the last snapshot, not the current wall clock. This is intentional — if snapshotting stops, the retention window freezes rather than expiring all old snapshots.
 
@@ -270,6 +273,9 @@ Unit tests create `deleteFsProcessor` and `fsProcessor` structs directly — the
 
 **Pitfall: breaking the JSON config format**
 When adding fields to a config struct, old config files that don't mention the new field still parse successfully (zero value). Fields that should default to true (currently `include_properties`, `resumable`, and `disable_mount`) are set to true in `Main()` or `Run()` after config load using nil-check patterns (`if cfg.Resumable == nil { t := true; cfg.Resumable = &t }`).
+
+**Pitfall: `omitempty` on `bool` or numeric fields**
+In `encoding/json/v2`, `omitempty` omits a field only when its *JSON* encoding is empty (`null`, `""`, `{}`, `[]`), so `false` and `0` are still emitted. Use `omitzero` for `bool` and integer fields (as on `send_full`, `force_overwrite`, `raw_send`, `preserve_top_n`); keep `omitempty` for strings, slices, maps and pointers. `internal/config/wire_test.go` asserts that a zero `IncrementalSuggestions` marshals to `{}`.
 
 **Pitfall: shadowing `path` (the package) with a variable named `path`**
 `internal/receiver/receiver.go` imports the `path` package. Use `filePath` or `dirPath` for local variables.
