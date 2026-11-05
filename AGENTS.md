@@ -262,10 +262,10 @@ CI (`.github/workflows/ci.yml`) additionally gates on `go mod tidy -diff`, stati
 | `internal/config` | `ResolveInclude`/`ResolveExclude`; full JSON round-trip of all wire types (`IncrementalSuggestions`, `SetPlaceholders`, `PlaceholderEntry`) including `omitempty` and exact field name checks |
 | `internal/zfs` | `ParseDuration` (valid, invalid, ParseInt overflow); `IsValidZFSDataset` (valid names, invalid names, `.`/`..` components); `ParseTabular` (success, empty output, command fails); `Group`/`NewGroup`/`Go`/`Wait` (success, error propagation, context cancellation, first-error-wins) |
 | `internal/sender` | `autoPlaceholderName` (stability, whitespace normalization, no hyphens, distinct names); `compressionType` (empty→"none", explicit value); `PotentialSnapsToSend`; `ActualSnapsToSend` (no base, intermediate, placeholder-driven mandatory, bookmark base); `baseFor` (snapshot preferred over a bookmark with the same GUID); `incrementalArgs` |
-| `internal/deleter` | `preserveTopN`; `preserveNewerThan`; `markForPreservation` (interval rules, holes, invalid duration, snap outside window, large-interval bias capping, invalid `preserve_newer_than` path); `newDeleteFsProcessor` (valid/invalid regexp); `deleteManySnaps` (nil/empty list) |
+| `internal/deleter` | `preserveTopN`; `preserveNewerThan`; `markForPreservation` (interval rules, holes, snap outside window, large-interval bias capping); `newPolicy` (invalid durations, counts and `preserve_top_n`); `newDeleteFsProcessor` (valid/invalid regexp); `deleteManySnaps` (nil/empty list) |
 | `internal/monitor` | `metric.asPrometheus` (no dims, one dim, multiple dims, negative value); `mon.asPrometheus` (HELP/TYPE headers, dedup, ordering) |
 
-Unit tests create `deleteFsProcessor` and `fsProcessor` structs directly — they do **not** call `newDeleteFsProcessor` or `NewFSProcessor`. Tests for `markForPreservation` bypass ZFS entirely by populating `dfp.snaps` directly.
+Unit tests create `deleteFsProcessor` and `fsProcessor` structs directly — they do **not** call `newDeleteFsProcessor` or `NewFSProcessor`. Tests for `markForPreservation` bypass ZFS entirely by populating `dfp.snaps` directly and building `dfp.policy` with the `mustPolicy` helper. The deleter parses and validates its config once in `newPolicy`; `markForPreservation` does not re-validate.
 
 **Integration tests** require a delegated ZFS filesystem (`DELEGATED_FS=pool/testfs`). They exercise the full pipeline including actual `zfs` commands.
 

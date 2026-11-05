@@ -34,11 +34,10 @@ func TestRunRejectsInvalidParallelism(t *testing.T) {
 	}
 }
 
-func TestMarkForPreservationValidatesRulesWithoutSnapshots(t *testing.T) {
-	dfp := &deleteFsProcessor{cfg: &config.DeleterConfig{
+func TestNewPolicyValidatesRulesWithoutSnapshots(t *testing.T) {
+	if _, err := newPolicy(&config.DeleterConfig{
 		Rules: []config.RetentionRule{{Interval: "0s", Count: 1}},
-	}}
-	if _, err := dfp.markForPreservation(); err == nil {
+	}); err == nil {
 		t.Fatal("expected invalid rule error even without snapshots")
 	}
 }

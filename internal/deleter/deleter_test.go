@@ -1,7 +1,6 @@
 package deleter
 
 import (
-	"math/big"
 	"strings"
 	"testing"
 	"time"
@@ -12,13 +11,21 @@ import (
 // makeSnap builds a snapshot with a timestamp offset from base.
 // txg is set to secondsFromBase+1 to keep it strictly increasing.
 func makeSnap(name string, secondsFromBase int64, base time.Time) snapshot {
-	var txg big.Int
-	txg.SetInt64(secondsFromBase + 1)
 	return snapshot{
 		Name:      name,
 		Timestamp: base.Add(time.Duration(secondsFromBase) * time.Second),
-		CreateTxg: txg,
+		CreateTxg: uint64(secondsFromBase + 1),
 	}
+}
+
+// mustPolicy compiles dc for tests that construct a deleteFsProcessor directly.
+func mustPolicy(t *testing.T, dc *config.DeleterConfig) *policy {
+	t.Helper()
+	p, err := newPolicy(dc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
 }
 
 // ─── preserveTopN ────────────────────────────────────────────────────────────
@@ -26,7 +33,7 @@ func makeSnap(name string, secondsFromBase int64, base time.Time) snapshot {
 func TestPreserveTopN_topNLessThanLen(t *testing.T) {
 	base := time.Unix(1_000_000, 0)
 	dfp := &deleteFsProcessor{
-		cfg: &config.DeleterConfig{PreserveTopN: 3},
+		policy: mustPolicy(t, &config.DeleterConfig{PreserveTopN: 3}),
 		snaps: []snapshot{
 			makeSnap("s1", 1, base),
 			makeSnap("s2", 2, base),
@@ -47,8 +54,8 @@ func TestPreserveTopN_topNLessThanLen(t *testing.T) {
 func TestPreserveTopN_zero_nonePreserved(t *testing.T) {
 	base := time.Unix(1_000_000, 0)
 	dfp := &deleteFsProcessor{
-		cfg:   &config.DeleterConfig{PreserveTopN: 0},
-		snaps: []snapshot{makeSnap("s1", 1, base), makeSnap("s2", 2, base)},
+		policy: mustPolicy(t, &config.DeleterConfig{PreserveTopN: 0}),
+		snaps:  []snapshot{makeSnap("s1", 1, base), makeSnap("s2", 2, base)},
 	}
 	dfp.preserveTopN()
 	for _, s := range dfp.snaps {
@@ -61,8 +68,8 @@ func TestPreserveTopN_zero_nonePreserved(t *testing.T) {
 func TestPreserveTopN_greaterThanLen_allPreserved(t *testing.T) {
 	base := time.Unix(1_000_000, 0)
 	dfp := &deleteFsProcessor{
-		cfg:   &config.DeleterConfig{PreserveTopN: 10},
-		snaps: []snapshot{makeSnap("s1", 1, base), makeSnap("s2", 2, base)},
+		policy: mustPolicy(t, &config.DeleterConfig{PreserveTopN: 10}),
+		snaps:  []snapshot{makeSnap("s1", 1, base), makeSnap("s2", 2, base)},
 	}
 	dfp.preserveTopN()
 	for _, s := range dfp.snaps {
@@ -75,7 +82,7 @@ func TestPreserveTopN_greaterThanLen_allPreserved(t *testing.T) {
 func TestPreserveTopN_exactlyN_allPreserved(t *testing.T) {
 	base := time.Unix(1_000_000, 0)
 	dfp := &deleteFsProcessor{
-		cfg: &config.DeleterConfig{PreserveTopN: 3},
+		policy: mustPolicy(t, &config.DeleterConfig{PreserveTopN: 3}),
 		snaps: []snapshot{
 			makeSnap("s1", 1, base),
 			makeSnap("s2", 2, base),
@@ -95,13 +102,11 @@ func TestPreserveTopN_exactlyN_allPreserved(t *testing.T) {
 func TestPreserveNewerThan_nilSetting_noOp(t *testing.T) {
 	base := time.Unix(1_000_000, 0)
 	dfp := &deleteFsProcessor{
-		cfg:   &config.DeleterConfig{},
-		snaps: []snapshot{makeSnap("s1", 1, base)},
-		now:   base.Add(time.Hour),
+		policy: mustPolicy(t, &config.DeleterConfig{}),
+		snaps:  []snapshot{makeSnap("s1", 1, base)},
+		now:    base.Add(time.Hour),
 	}
-	if err := dfp.preserveNewerThan(); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	dfp.preserveNewerThan()
 	if dfp.snaps[0].preserve {
 		t.Error("snap should not be preserved when PreserveNewerThan is empty")
 	}
@@ -110,16 +115,14 @@ func TestPreserveNewerThan_nilSetting_noOp(t *testing.T) {
 func TestPreserveNewerThan_newerSnapsPreserved(t *testing.T) {
 	base := time.Unix(1_000_000, 0)
 	dfp := &deleteFsProcessor{
-		cfg: &config.DeleterConfig{PreserveNewerThan: "1h"},
+		policy: mustPolicy(t, &config.DeleterConfig{PreserveNewerThan: "1h"}),
 		snaps: []snapshot{
 			makeSnap("old", 0, base),
 			makeSnap("recent", int64(90*time.Minute/time.Second), base),
 		},
 		now: base.Add(2 * time.Hour),
 	}
-	if err := dfp.preserveNewerThan(); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	dfp.preserveNewerThan()
 	if dfp.snaps[0].preserve {
 		t.Error("'old' snap (2h ago) should not be preserved with 1h threshold")
 	}
@@ -131,13 +134,11 @@ func TestPreserveNewerThan_newerSnapsPreserved(t *testing.T) {
 func TestPreserveNewerThan_allOlderThanThreshold(t *testing.T) {
 	base := time.Unix(1_000_000, 0)
 	dfp := &deleteFsProcessor{
-		cfg:   &config.DeleterConfig{PreserveNewerThan: "30m"},
-		snaps: []snapshot{makeSnap("s1", 0, base), makeSnap("s2", 60, base)},
-		now:   base.Add(2 * time.Hour),
+		policy: mustPolicy(t, &config.DeleterConfig{PreserveNewerThan: "30m"}),
+		snaps:  []snapshot{makeSnap("s1", 0, base), makeSnap("s2", 60, base)},
+		now:    base.Add(2 * time.Hour),
 	}
-	if err := dfp.preserveNewerThan(); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	dfp.preserveNewerThan()
 	for _, s := range dfp.snaps {
 		if s.preserve {
 			t.Errorf("snap %q (2h old) should not be preserved with 30m threshold", s.Name)
@@ -145,15 +146,14 @@ func TestPreserveNewerThan_allOlderThanThreshold(t *testing.T) {
 	}
 }
 
-func TestPreserveNewerThan_invalidDuration_returnsError(t *testing.T) {
-	base := time.Unix(1_000_000, 0)
-	dfp := &deleteFsProcessor{
-		cfg:   &config.DeleterConfig{PreserveNewerThan: "notaduration"},
-		snaps: []snapshot{makeSnap("s1", 1, base)},
-		now:   base.Add(time.Hour),
-	}
-	if err := dfp.preserveNewerThan(); err == nil {
-		t.Error("expected error for invalid duration, got nil")
+func TestNewPolicy_invalidDurations_returnError(t *testing.T) {
+	for _, dc := range []config.DeleterConfig{
+		{PreserveNewerThan: "notaduration"},
+		{Rules: []config.RetentionRule{{Interval: "notaduration", Count: 3}}},
+	} {
+		if _, err := newPolicy(&dc); err == nil {
+			t.Errorf("newPolicy(%+v): expected error for invalid duration, got nil", dc)
+		}
 	}
 }
 
@@ -169,9 +169,9 @@ func TestMarkForPreservation_recentAndOldSnap_multiIntervalRule(t *testing.T) {
 		makeSnap("recent", int64(7*24*time.Hour/time.Second), base), // ≈ now
 	}
 	dfp := &deleteFsProcessor{
-		fs:    "tank",
-		cfg:   &config.DeleterConfig{Rules: []config.RetentionRule{{Interval: "3d", Count: 4, AllowHoles: true}}},
-		snaps: snaps,
+		fs:     "tank",
+		policy: mustPolicy(t, &config.DeleterConfig{Rules: []config.RetentionRule{{Interval: "3d", Count: 4, AllowHoles: true}}}),
+		snaps:  snaps,
 	}
 	_, err := dfp.markForPreservation()
 	if err != nil {
@@ -179,20 +179,6 @@ func TestMarkForPreservation_recentAndOldSnap_multiIntervalRule(t *testing.T) {
 	}
 	if !snaps[1].preserve {
 		t.Error("most recent snapshot should be preserved by the 3-day rule")
-	}
-}
-
-func TestMarkForPreservation_invalidPreserveNewerThan_returnsError(t *testing.T) {
-	// Exercises the markForPreservation → preserveNewerThan error path.
-	base := time.Unix(1_000_000, 0)
-	dfp := &deleteFsProcessor{
-		fs:    "tank",
-		cfg:   &config.DeleterConfig{PreserveNewerThan: "notaduration"},
-		snaps: []snapshot{makeSnap("s1", 0, base)},
-	}
-	_, err := dfp.markForPreservation()
-	if err == nil {
-		t.Error("expected error for invalid preserve_newer_than, got nil")
 	}
 }
 
@@ -205,9 +191,9 @@ func TestMarkForPreservation_snapOutsideRetentionWindow_skipped(t *testing.T) {
 		makeSnap("recent", int64(2*24*time.Hour/time.Second), base), // inside window
 	}
 	dfp := &deleteFsProcessor{
-		fs:    "tank",
-		cfg:   &config.DeleterConfig{Rules: []config.RetentionRule{{Interval: "1h", Count: 2}}},
-		snaps: snaps,
+		fs:     "tank",
+		policy: mustPolicy(t, &config.DeleterConfig{Rules: []config.RetentionRule{{Interval: "1h", Count: 2}}}),
+		snaps:  snaps,
 	}
 	toDelete, err := dfp.markForPreservation()
 	if err != nil {
@@ -227,8 +213,8 @@ func TestMarkForPreservation_snapOutsideRetentionWindow_skipped(t *testing.T) {
 
 func TestMarkForPreservation_emptySnaps_returnsNil(t *testing.T) {
 	dfp := &deleteFsProcessor{
-		cfg:   &config.DeleterConfig{PreserveTopN: 5},
-		snaps: nil,
+		policy: mustPolicy(t, &config.DeleterConfig{PreserveTopN: 5}),
+		snaps:  nil,
 	}
 	toDelete, err := dfp.markForPreservation()
 	if err != nil {
@@ -242,7 +228,7 @@ func TestMarkForPreservation_emptySnaps_returnsNil(t *testing.T) {
 func TestMarkForPreservation_topNOnly(t *testing.T) {
 	base := time.Unix(1_000_000, 0)
 	dfp := &deleteFsProcessor{
-		cfg: &config.DeleterConfig{PreserveTopN: 2},
+		policy: mustPolicy(t, &config.DeleterConfig{PreserveTopN: 2}),
 		snaps: []snapshot{
 			makeSnap("old", 0, base),
 			makeSnap("mid", 100, base),
@@ -264,21 +250,19 @@ func TestMarkForPreservation_intervalRule_keepsOnePerDay(t *testing.T) {
 	end := time.Unix(1_000_000+23*3600, 0) // absolute, doesn't need to be "now"
 	snaps := make([]snapshot, 24)
 	for i := 0; i < 24; i++ {
-		var txg big.Int
-		txg.SetInt64(int64(i + 1))
 		snaps[i] = snapshot{
 			Name:      "snap" + string(rune('a'+i)),
 			Timestamp: end.Add(-time.Duration(23-i) * time.Hour),
-			CreateTxg: txg,
+			CreateTxg: uint64(i + 1),
 		}
 	}
 	dfp := &deleteFsProcessor{
 		fs: "tank",
-		cfg: &config.DeleterConfig{
+		policy: mustPolicy(t, &config.DeleterConfig{
 			Rules: []config.RetentionRule{
 				{Interval: "24h", Count: 3},
 			},
-		},
+		}),
 		snaps: snaps,
 	}
 	toDelete, err := dfp.markForPreservation()
@@ -303,7 +287,7 @@ func TestMarkForPreservation_holeForbidden_returnsError(t *testing.T) {
 	}
 	dfp := &deleteFsProcessor{
 		fs: "tank",
-		cfg: &config.DeleterConfig{
+		policy: mustPolicy(t, &config.DeleterConfig{
 			Rules: []config.RetentionRule{
 				{
 					Interval:   "24h",
@@ -311,7 +295,7 @@ func TestMarkForPreservation_holeForbidden_returnsError(t *testing.T) {
 					AllowHoles: false,
 				},
 			},
-		},
+		}),
 		snaps: snaps,
 	}
 	_, err := dfp.markForPreservation()
@@ -328,7 +312,7 @@ func TestMarkForPreservation_holeAllowed_noError(t *testing.T) {
 	}
 	dfp := &deleteFsProcessor{
 		fs: "tank",
-		cfg: &config.DeleterConfig{
+		policy: mustPolicy(t, &config.DeleterConfig{
 			Rules: []config.RetentionRule{
 				{
 					Interval:   "24h",
@@ -336,29 +320,12 @@ func TestMarkForPreservation_holeAllowed_noError(t *testing.T) {
 					AllowHoles: true,
 				},
 			},
-		},
+		}),
 		snaps: snaps,
 	}
 	_, err := dfp.markForPreservation()
 	if err != nil {
 		t.Errorf("expected no error for hole with allow_holes=true; got %v", err)
-	}
-}
-
-func TestMarkForPreservation_invalidRuleDuration_returnsError(t *testing.T) {
-	base := time.Unix(1_000_000, 0)
-	dfp := &deleteFsProcessor{
-		fs: "tank",
-		cfg: &config.DeleterConfig{
-			Rules: []config.RetentionRule{
-				{Interval: "notaduration", Count: 3},
-			},
-		},
-		snaps: []snapshot{makeSnap("s1", 0, base), makeSnap("s2", 3600, base)},
-	}
-	_, err := dfp.markForPreservation()
-	if err == nil {
-		t.Error("expected error for invalid interval duration; got nil")
 	}
 }
 

@@ -1,11 +1,11 @@
 package deleter
 
 import (
+	"cmp"
 	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
-	"math/big"
 	"os"
 	"regexp"
 	"slices"
@@ -21,23 +21,61 @@ import (
 type snapshot struct {
 	Name      string
 	Timestamp time.Time
-	CreateTxg big.Int
+	CreateTxg uint64
 	preserve  bool
+}
+
+// policy is a validated DeleterConfig with its durations parsed once.
+type policy struct {
+	topN      int64
+	newerThan time.Duration // zero when preserve_newer_than is unset
+	rules     []rule
+}
+
+type rule struct {
+	config.RetentionRule               // as configured, for messages
+	interval             time.Duration // parsed RetentionRule.Interval
+}
+
+func newPolicy(dc *config.DeleterConfig) (*policy, error) {
+	if dc.PreserveTopN < 0 {
+		return nil, fmt.Errorf("preserve_top_n must not be negative")
+	}
+	p := &policy{topN: dc.PreserveTopN}
+	if dc.PreserveNewerThan != "" {
+		newerThan, err := zfs.ParseDuration(dc.PreserveNewerThan)
+		if err != nil {
+			return nil, fmt.Errorf("invalid preserve_newer_than: %w", err)
+		}
+		p.newerThan = newerThan
+	}
+	for _, r := range dc.Rules {
+		interval, err := zfs.ParseDuration(r.Interval)
+		if err != nil {
+			return nil, fmt.Errorf("invalid retention interval: %w", err)
+		}
+		if interval <= 0 || r.Count <= 0 {
+			return nil, fmt.Errorf("retention interval and count must be positive: %v", r)
+		}
+		p.rules = append(p.rules, rule{RetentionRule: r, interval: interval})
+	}
+	return p, nil
 }
 
 type deleteFsProcessor struct {
 	fs      string
-	cfg     *config.DeleterConfig
+	policy  *policy
 	snaps   []snapshot
 	now     time.Time
 	regexps []*regexp.Regexp
 }
 
 func newDeleteFsProcessor(dc *config.DeleterConfig, fs string) (*deleteFsProcessor, error) {
-	if err := validateRetentionConfig(dc); err != nil {
+	p, err := newPolicy(dc)
+	if err != nil {
 		return nil, err
 	}
-	dfp := &deleteFsProcessor{fs: fs, cfg: dc}
+	dfp := &deleteFsProcessor{fs: fs, policy: p}
 	for _, r := range dc.Regex {
 		re, err := regexp.Compile(r)
 		if err != nil {
@@ -48,27 +86,6 @@ func newDeleteFsProcessor(dc *config.DeleterConfig, fs string) (*deleteFsProcess
 	return dfp, nil
 }
 
-func validateRetentionConfig(dc *config.DeleterConfig) error {
-	if dc.PreserveTopN < 0 {
-		return fmt.Errorf("preserve_top_n must not be negative")
-	}
-	if dc.PreserveNewerThan != "" {
-		if _, err := zfs.ParseDuration(dc.PreserveNewerThan); err != nil {
-			return fmt.Errorf("invalid preserve_newer_than: %w", err)
-		}
-	}
-	for _, rule := range dc.Rules {
-		interval, err := zfs.ParseDuration(rule.Interval)
-		if err != nil {
-			return fmt.Errorf("invalid retention interval: %w", err)
-		}
-		if interval <= 0 || rule.Count <= 0 {
-			return fmt.Errorf("retention interval and count must be positive: %v", rule)
-		}
-	}
-	return nil
-}
-
 func (dfp *deleteFsProcessor) getValidatedSnaps() error {
 	found, err := zfs.ZfsList([]string{"name", "createtxg", "creation"}, "snapshot", dfp.fs, "-s", "createtxg")
 	if err != nil {
@@ -77,9 +94,9 @@ func (dfp *deleteFsProcessor) getValidatedSnaps() error {
 	dfp.snaps = dfp.snaps[:0]
 	for _, arr := range found {
 		snapname := strings.TrimPrefix(arr[0], dfp.fs+"@")
-		var txg big.Int
-		if _, ok := txg.SetString(arr[1], 10); !ok {
-			return fmt.Errorf("cannot parse %q as txg number for snapshot %s", arr[1], snapname)
+		txg, err := strconv.ParseUint(arr[1], 10, 64)
+		if err != nil {
+			return fmt.Errorf("cannot parse %q as txg number for snapshot %s: %w", arr[1], snapname, err)
 		}
 		unixtime, err := strconv.ParseInt(arr[2], 10, 64)
 		if err != nil {
@@ -105,10 +122,10 @@ func (dfp *deleteFsProcessor) getValidatedSnaps() error {
 		if cmp := a.Timestamp.Compare(b.Timestamp); cmp != 0 {
 			return cmp
 		}
-		return a.CreateTxg.Cmp(&b.CreateTxg)
+		return cmp.Compare(a.CreateTxg, b.CreateTxg)
 	})
 	for i := 1; i < len(dfp.snaps); i++ {
-		if dfp.snaps[i-1].CreateTxg.Cmp(&dfp.snaps[i].CreateTxg) == 1 {
+		if dfp.snaps[i-1].CreateTxg > dfp.snaps[i].CreateTxg {
 			return fmt.Errorf("%v has createtxg not greater than %v", dfp.snaps[i], dfp.snaps[i-1])
 		}
 	}
@@ -116,57 +133,38 @@ func (dfp *deleteFsProcessor) getValidatedSnaps() error {
 }
 
 func (dfp *deleteFsProcessor) preserveTopN() {
-	topN := int(min(dfp.cfg.PreserveTopN, int64(len(dfp.snaps))))
+	topN := int(min(dfp.policy.topN, int64(len(dfp.snaps))))
 	for i := len(dfp.snaps) - topN; i < len(dfp.snaps); i++ {
 		dfp.snaps[i].preserve = true
 	}
 }
 
-func (dfp *deleteFsProcessor) preserveNewerThan() error {
-	if dfp.cfg.PreserveNewerThan == "" {
-		return nil
-	}
-	newerThan, err := zfs.ParseDuration(dfp.cfg.PreserveNewerThan)
-	if err != nil {
-		return err
-	}
-	if newerThan < 0 {
-		return fmt.Errorf("preserve_newer_than must not be negative")
+func (dfp *deleteFsProcessor) preserveNewerThan() {
+	if dfp.policy.newerThan == 0 {
+		return
 	}
 	for i := range dfp.snaps {
-		if dfp.now.Sub(dfp.snaps[i].Timestamp) < newerThan {
+		if dfp.now.Sub(dfp.snaps[i].Timestamp) < dfp.policy.newerThan {
 			dfp.snaps[i].preserve = true
 		}
 	}
-	return nil
 }
 
-// markForPreservation applies all configured retention rules to dfp.snaps,
-// setting the preserve flag on each snapshot that should be kept, and returns
-// the names of snapshots that should be deleted. dfp.snaps must already be
-// populated. This is separated from ProcessFs so it can be tested without ZFS.
+// markForPreservation applies the retention policy to dfp.snaps, setting the
+// preserve flag on each snapshot that should be kept, and returns the names of
+// snapshots that should be deleted. dfp.snaps must already be populated. This
+// is separated from ProcessFs so it can be tested without ZFS.
 func (dfp *deleteFsProcessor) markForPreservation() ([]string, error) {
-	if err := validateRetentionConfig(dfp.cfg); err != nil {
-		return nil, err
-	}
 	if len(dfp.snaps) == 0 {
 		return nil, nil
 	}
 	dfp.now = dfp.snaps[len(dfp.snaps)-1].Timestamp
 	dfp.preserveTopN()
-	if err := dfp.preserveNewerThan(); err != nil {
-		return nil, err
-	}
+	dfp.preserveNewerThan()
 
-	for _, r := range dfp.cfg.Rules {
-		slog.Debug("applying retention rule", "rule", r)
-		intervalSize, err := zfs.ParseDuration(r.Interval)
-		if err != nil {
-			return nil, err
-		}
-		if intervalSize <= 0 || r.Count <= 0 {
-			return nil, fmt.Errorf("retention interval and count must be positive: %v", r)
-		}
+	for _, r := range dfp.policy.rules {
+		slog.Debug("applying retention rule", "rule", r.RetentionRule)
+		intervalSize := r.interval
 		nowUnix := dfp.now.Unix()
 		lastInterval := int64(-1)
 		holeMsg := ""
@@ -179,7 +177,7 @@ func (dfp *deleteFsProcessor) markForPreservation() ([]string, error) {
 				continue
 			}
 			if intervalIdx > lastInterval+1 && holeMsg == "" {
-				holeMsg = fmt.Sprintf("hole in retention rule %v for %s; intervals: %d to %d", r, dfp.fs, lastInterval+1, intervalIdx-1)
+				holeMsg = fmt.Sprintf("hole in retention rule %v for %s; intervals: %d to %d", r.RetentionRule, dfp.fs, lastInterval+1, intervalIdx-1)
 				if !r.AllowHoles {
 					return nil, fmt.Errorf("%s", holeMsg)
 				}

@@ -12,7 +12,7 @@ import (
 func TestRetentionKeepsNewestInExactlyCountBuckets(t *testing.T) {
 	base := time.Unix(1_000_000, 0)
 	dfp := &deleteFsProcessor{
-		cfg: &config.DeleterConfig{Rules: []config.RetentionRule{{Interval: "1h", Count: 2}}},
+		policy: mustPolicy(t, &config.DeleterConfig{Rules: []config.RetentionRule{{Interval: "1h", Count: 2}}}),
 		snaps: []snapshot{
 			makeSnap("outside", 0, base),
 			makeSnap("older_previous", 3600, base),
@@ -48,9 +48,8 @@ func TestRetentionRejectsInvalidSettings(t *testing.T) {
 					t.Errorf("retention panicked: %v", p)
 				}
 			}()
-			dfp := &deleteFsProcessor{cfg: &tc.cfg, snaps: []snapshot{makeSnap("latest", 0, time.Unix(0, 0))}}
-			if deleted, err := dfp.markForPreservation(); err == nil || len(deleted) != 0 {
-				t.Fatalf("got deletions %v, error %v; want validation error and no deletions", deleted, err)
+			if _, err := newPolicy(&tc.cfg); err == nil {
+				t.Fatal("want a validation error")
 			}
 		})
 	}
@@ -63,8 +62,8 @@ func TestRetentionLargeCountDoesNotAllocateBuckets(t *testing.T) {
 		}
 	}()
 	dfp := &deleteFsProcessor{
-		cfg:   &config.DeleterConfig{Rules: []config.RetentionRule{{Interval: "1h", Count: math.MaxInt64}}},
-		snaps: []snapshot{makeSnap("latest", 0, time.Unix(0, 0))},
+		policy: mustPolicy(t, &config.DeleterConfig{Rules: []config.RetentionRule{{Interval: "1h", Count: math.MaxInt64}}}),
+		snaps:  []snapshot{makeSnap("latest", 0, time.Unix(0, 0))},
 	}
 	if deleted, err := dfp.markForPreservation(); err != nil || len(deleted) != 0 {
 		t.Fatalf("got deletions %v, error %v; want latest preserved", deleted, err)
@@ -73,7 +72,7 @@ func TestRetentionLargeCountDoesNotAllocateBuckets(t *testing.T) {
 
 func TestRetentionHoleBeforeOldestRetainedBucket(t *testing.T) {
 	dfp := &deleteFsProcessor{
-		cfg: &config.DeleterConfig{Rules: []config.RetentionRule{{Interval: "1h", Count: 3}}},
+		policy: mustPolicy(t, &config.DeleterConfig{Rules: []config.RetentionRule{{Interval: "1h", Count: 3}}}),
 		snaps: []snapshot{
 			makeSnap("older", 0, time.Unix(0, 0)),
 			makeSnap("latest", 7200, time.Unix(0, 0)),
